@@ -42,15 +42,15 @@ The server requires the following environment variables:
 |----------|-------------|----------|
 | `WOFFU_TOKEN` | JWT Bearer token for Woffu API | Yes |
 | `WOFFU_USER_ID` | Your Woffu user ID | Yes |
-| `WOFFU_BASE_URL` | Woffu instance URL | No (defaults to `https://app.woffu.com`) |
+| `WOFFU_BASE_URL` | Woffu instance URL (e.g., `https://mycompany.woffu.com`) | No (defaults to `https://app.woffu.com`) |
 
 ### How to get your Woffu JWT Token
 
-1. Log in to your Woffu web portal (e.g., `https://app.woffu.com`)
+1. Log in to your Woffu web portal (e.g., `https://mycompany.woffu.com`)
 2. Open browser Developer Tools (F12)
 3. Go to the **Application** tab (Chrome) or **Storage** tab (Firefox)
 4. In the left panel, expand **Cookies**
-5. Click on `https://app.woffu.com`
+5. Click on your Woffu domain (e.g., `https://mycompany.woffu.com`)
 6. Find the cookie named **`woffu.token`**
 7. Copy the value - this is your `WOFFU_TOKEN`
 
@@ -87,7 +87,8 @@ Add the following to your Claude Desktop configuration file:
       "args": ["-y", "github:iflorit/mcp-woffu-server"],
       "env": {
         "WOFFU_TOKEN": "your-jwt-token-here",
-        "WOFFU_USER_ID": "your-user-id"
+        "WOFFU_USER_ID": "your-user-id",
+        "WOFFU_BASE_URL": "https://mycompany.woffu.com"
       }
     }
   }
@@ -97,7 +98,7 @@ Add the following to your Claude Desktop configuration file:
 ### With Claude Code
 
 ```bash
-claude mcp add woffu --env WOFFU_TOKEN=your-token --env WOFFU_USER_ID=your-id -- npx -y github:iflorit/mcp-woffu-server
+claude mcp add woffu --env WOFFU_TOKEN=your-token --env WOFFU_USER_ID=your-id --env WOFFU_BASE_URL=https://mycompany.woffu.com -- npx -y github:iflorit/mcp-woffu-server
 ```
 
 Or add to your `.claude.json`:
@@ -110,7 +111,8 @@ Or add to your `.claude.json`:
       "args": ["-y", "github:iflorit/mcp-woffu-server"],
       "env": {
         "WOFFU_TOKEN": "your-jwt-token-here",
-        "WOFFU_USER_ID": "your-user-id"
+        "WOFFU_USER_ID": "your-user-id",
+        "WOFFU_BASE_URL": "https://mycompany.woffu.com"
       }
     }
   }
@@ -123,6 +125,7 @@ Or add to your `.claude.json`:
 # With environment variables
 export WOFFU_TOKEN="your-token"
 export WOFFU_USER_ID="your-user-id"
+export WOFFU_BASE_URL="https://mycompany.woffu.com"
 
 # Run the server
 npx github:iflorit/mcp-woffu-server
