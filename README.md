@@ -6,8 +6,9 @@ A Model Context Protocol (MCP) server for Woffu time tracking integration. This 
 
 - **Clock In/Out**: Start and end your workday with simple commands
 - **Today's Status**: Check your current work status, hours worked, and schedule
-- **Month Summary**: Get a comprehensive overview of your monthly worked hours
+- **Week/Month Summary**: Get a comprehensive overview of your worked hours
 - **Complete Past Days**: Fill in missing time entries for past dates
+- **Pending Days**: View days without logged hours
 
 ## Installation
 
@@ -33,6 +34,21 @@ uv pip install mcp-woffu-server
 
 ## Configuration
 
+### Quick Setup (Recommended)
+
+Run the interactive setup wizard:
+
+```bash
+woffu-mcp-server --setup
+```
+
+This will guide you through:
+1. Obtaining your Woffu token from the browser
+2. Finding your User ID
+3. Generating and saving the MCP configuration
+
+### Manual Configuration
+
 The server requires the following environment variables:
 
 | Variable | Description | Required |
@@ -43,21 +59,29 @@ The server requires the following environment variables:
 
 ### How to get your Woffu JWT Token
 
-1. Log in to your Woffu web portal (e.g., `https://yourcompany.woffu.com`)
+1. Log in to your Woffu web portal (e.g., `https://app.woffu.com`)
 2. Open browser Developer Tools (F12)
-3. Go to the **Network** tab
-4. Perform any action (like viewing your dashboard)
-5. Find a request to the Woffu API
-6. In the request headers, copy the `Authorization: Bearer <token>` value
-7. The token part after "Bearer " is your `WOFFU_TOKEN`
+3. Go to the **Application** tab (Chrome) or **Storage** tab (Firefox)
+4. In the left panel, expand **Cookies**
+5. Click on `https://app.woffu.com`
+6. Find the cookie named **`woffu.token`**
+7. Copy the value - this is your `WOFFU_TOKEN`
 
-**Note**: JWT tokens typically expire. You may need to refresh the token periodically.
+**Alternative via Console:**
+```javascript
+document.cookie.split(';').find(c => c.trim().startsWith('woffu.token=')).split('=')[1]
+```
+
+**Note**: JWT tokens expire periodically. You may need to refresh the token when it expires.
 
 ### How to find your User ID
 
-1. In the browser Developer Tools, look at any API request
-2. The URL often contains your user ID (e.g., `/api/users/1234567/...`)
-3. Alternatively, check your Woffu profile settings
+The User ID is embedded in the JWT token. You can decode it at [jwt.io](https://jwt.io) and look for the `UserId` field in the payload.
+
+Alternatively:
+1. In the browser Developer Tools, go to **Network** tab
+2. Perform any action in Woffu
+3. Look at any API request URL - it often contains your user ID (e.g., `/api/users/1234567/...`)
 
 ## Usage
 
@@ -76,8 +100,7 @@ Add the following to your Claude Desktop configuration file:
       "args": ["-m", "woffu_mcp.server"],
       "env": {
         "WOFFU_TOKEN": "your-jwt-token-here",
-        "WOFFU_USER_ID": "your-user-id",
-        "WOFFU_BASE_URL": "https://yourcompany.woffu.com"
+        "WOFFU_USER_ID": "your-user-id"
       }
     }
   }
@@ -94,8 +117,7 @@ Or if installed with uv:
       "args": ["run", "woffu-mcp-server"],
       "env": {
         "WOFFU_TOKEN": "your-jwt-token-here",
-        "WOFFU_USER_ID": "your-user-id",
-        "WOFFU_BASE_URL": "https://yourcompany.woffu.com"
+        "WOFFU_USER_ID": "your-user-id"
       }
     }
   }
@@ -114,8 +136,7 @@ Add to your `.claude/mcp.json`:
       "args": ["-m", "woffu_mcp.server"],
       "env": {
         "WOFFU_TOKEN": "your-jwt-token-here",
-        "WOFFU_USER_ID": "your-user-id",
-        "WOFFU_BASE_URL": "https://yourcompany.woffu.com"
+        "WOFFU_USER_ID": "your-user-id"
       }
     }
   }
@@ -128,7 +149,6 @@ Add to your `.claude/mcp.json`:
 # With environment variables
 export WOFFU_TOKEN="your-token"
 export WOFFU_USER_ID="your-user-id"
-export WOFFU_BASE_URL="https://yourcompany.woffu.com"
 
 # Run the server
 python -m woffu_mcp.server
@@ -196,6 +216,42 @@ Get a summary of worked hours for a specific month.
 
 **Returns**: Monthly presence summary with daily breakdowns.
 
+### `woffu_week_summary`
+
+Get a weekly summary of worked hours.
+
+**Parameters**:
+- `date` (optional): Any date within the desired week in YYYY-MM-DD format
+
+**Returns**: Weekly presence summary with daily breakdowns.
+
+### `woffu_day_detail`
+
+Get detailed information for a specific day.
+
+**Parameters**:
+- `date` (optional): Date in YYYY-MM-DD format (defaults to today)
+
+**Returns**: Detailed day information including all clock events.
+
+### `woffu_pending_days`
+
+Get days without completed hours.
+
+**Parameters**:
+- `year` (optional): Year (defaults to current year)
+- `month` (optional): Month 1-12 (defaults to current month)
+
+**Returns**: List of workdays where no hours have been logged.
+
+### `woffu_schedule`
+
+Get the user's assigned work schedule.
+
+**Parameters**: None
+
+**Returns**: Schedule information including work hours and office details.
+
 ### `woffu_complete_day`
 
 Complete or edit time entries for a past day.
@@ -224,6 +280,8 @@ Complete or edit time entries for a past day.
 > "Show me my hours for November 2024"
 
 > "I forgot to clock in yesterday. Can you fill in 9:00-14:00 and 15:00-18:00 for 2024-01-14?"
+
+> "Show me my pending days this month"
 
 ## Development
 
@@ -254,7 +312,7 @@ ruff format src/
 
 - **Never commit your JWT token** to version control
 - Use environment variables or secure secret management
-- JWT tokens expire - implement token refresh if needed
+- JWT tokens expire - refresh the token from the `woffu.token` cookie when needed
 - The server only accepts local connections by default
 
 ## License

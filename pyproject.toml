@@ -46,7 +46,7 @@ Repository = "https://github.com/iflorit/mcp-woffu-server.git"
 Issues = "https://github.com/iflorit/mcp-woffu-server/issues"
 
 [project.scripts]
-woffu-mcp-server = "woffu_mcp.server:main"
+woffu-mcp-server = "woffu_mcp.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
