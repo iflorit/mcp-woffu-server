@@ -20,7 +20,7 @@ pip install mcp-woffu-server
 ### From source
 
 ```bash
-git clone https://github.com/ismael/mcp-woffu-server.git
+git clone https://github.com/iflorit/mcp-woffu-server.git
 cd mcp-woffu-server
 pip install -e .
 ```
@@ -230,7 +230,7 @@ Complete or edit time entries for a past day.
 ### Setup
 
 ```bash
-git clone https://github.com/ismael/mcp-woffu-server.git
+git clone https://github.com/iflorit/mcp-woffu-server.git
 cd mcp-woffu-server
 python -m venv venv
 source venv/bin/activate  # or `venv\Scripts\activate` on Windows

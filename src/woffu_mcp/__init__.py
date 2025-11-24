@@ -3,7 +3,7 @@ MCP Woffu Server - Model Context Protocol server for Woffu time tracking.
 """
 
 __version__ = "0.1.0"
-__author__ = "Your Name"
+__author__ = "Ismael Florit"
 
 from .server import main
 from .tools import (
