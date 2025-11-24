@@ -1,0 +1,52 @@
+{
+  "name": "mcp-woffu-server",
+  "version": "0.1.0",
+  "description": "MCP server for Woffu time tracking integration",
+  "main": "dist/index.js",
+  "bin": {
+    "mcp-woffu-server": "./dist/index.js"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "prepare": "npm run build",
+    "postinstall": "npm run build || true"
+  },
+  "keywords": [
+    "mcp",
+    "woffu",
+    "time-tracking",
+    "claude",
+    "anthropic"
+  ],
+  "author": "Ismael Florit",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iflorit/mcp-woffu-server.git"
+  },
+  "bugs": {
+    "url": "https://github.com/iflorit/mcp-woffu-server/issues"
+  },
+  "homepage": "https://github.com/iflorit/mcp-woffu-server#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "typescript": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.0.0"
+  },
+  "files": [
+    "dist",
+    "src",
+    "tsconfig.json",
+    "README.md",
+    "LICENSE"
+  ]
+}

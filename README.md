@@ -12,10 +12,17 @@ A Model Context Protocol (MCP) server for Woffu time tracking integration. This 
 
 ## Installation
 
-### Using pip
+### Using npx from GitHub (recommended)
 
 ```bash
-pip install mcp-woffu-server
+npx github:iflorit/mcp-woffu-server
+```
+
+### Installing globally from GitHub
+
+```bash
+npm install -g github:iflorit/mcp-woffu-server
+mcp-woffu-server
 ```
 
 ### From source
@@ -23,31 +30,11 @@ pip install mcp-woffu-server
 ```bash
 git clone https://github.com/iflorit/mcp-woffu-server.git
 cd mcp-woffu-server
-pip install -e .
-```
-
-### Using uv (recommended)
-
-```bash
-uv pip install mcp-woffu-server
+npm install
+npm run build
 ```
 
 ## Configuration
-
-### Quick Setup (Recommended)
-
-Run the interactive setup wizard:
-
-```bash
-woffu-mcp-server --setup
-```
-
-This will guide you through:
-1. Obtaining your Woffu token from the browser
-2. Finding your User ID
-3. Generating and saving the MCP configuration
-
-### Manual Configuration
 
 The server requires the following environment variables:
 
@@ -96,25 +83,8 @@ Add the following to your Claude Desktop configuration file:
 {
   "mcpServers": {
     "woffu": {
-      "command": "python",
-      "args": ["-m", "woffu_mcp.server"],
-      "env": {
-        "WOFFU_TOKEN": "your-jwt-token-here",
-        "WOFFU_USER_ID": "your-user-id"
-      }
-    }
-  }
-}
-```
-
-Or if installed with uv:
-
-```json
-{
-  "mcpServers": {
-    "woffu": {
-      "command": "uv",
-      "args": ["run", "woffu-mcp-server"],
+      "command": "npx",
+      "args": ["-y", "github:iflorit/mcp-woffu-server"],
       "env": {
         "WOFFU_TOKEN": "your-jwt-token-here",
         "WOFFU_USER_ID": "your-user-id"
@@ -126,14 +96,18 @@ Or if installed with uv:
 
 ### With Claude Code
 
-Add to your `.claude/mcp.json`:
+```bash
+claude mcp add woffu --env WOFFU_TOKEN=your-token --env WOFFU_USER_ID=your-id -- npx -y github:iflorit/mcp-woffu-server
+```
+
+Or add to your `.claude.json`:
 
 ```json
 {
   "mcpServers": {
     "woffu": {
-      "command": "python",
-      "args": ["-m", "woffu_mcp.server"],
+      "command": "npx",
+      "args": ["-y", "github:iflorit/mcp-woffu-server"],
       "env": {
         "WOFFU_TOKEN": "your-jwt-token-here",
         "WOFFU_USER_ID": "your-user-id"
@@ -151,13 +125,7 @@ export WOFFU_TOKEN="your-token"
 export WOFFU_USER_ID="your-user-id"
 
 # Run the server
-python -m woffu_mcp.server
-```
-
-Or using the entry point:
-
-```bash
-woffu-mcp-server
+npx github:iflorit/mcp-woffu-server
 ```
 
 ## Available Tools
@@ -290,22 +258,19 @@ Complete or edit time entries for a past day.
 ```bash
 git clone https://github.com/iflorit/mcp-woffu-server.git
 cd mcp-woffu-server
-python -m venv venv
-source venv/bin/activate  # or `venv\Scripts\activate` on Windows
-pip install -e ".[dev]"
+npm install
 ```
 
-### Running Tests
+### Building
 
 ```bash
-pytest tests/
+npm run build
 ```
 
-### Code Style
+### Running in development
 
 ```bash
-ruff check src/
-ruff format src/
+npm run dev
 ```
 
 ## Security Notes
