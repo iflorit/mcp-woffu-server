@@ -250,10 +250,12 @@ async function getDayDetail(date) {
     }
 }
 async function fetchDiaries(config, fromDate, toDate) {
+    const rangeDays = Math.round((new Date(toDate).getTime() - new Date(fromDate).getTime()) / 86400000) + 1;
+    const pageSize = Math.max(31, rangeDays);
     const url = `${config.baseUrl}/api/svc/core/diariesquery/users/${config.userId}` +
         `/diaries/summary/presence?userId=${config.userId}` +
         `&fromDate=${fromDate}&toDate=${toDate}` +
-        `&pageSize=31&includeHourTypes=true&includeNotHourTypes=true&includeDifference=true`;
+        `&pageSize=${pageSize}&includeHourTypes=true&includeNotHourTypes=true&includeDifference=true`;
     const response = await fetch(url, {
         method: "GET",
         headers: getHeaders(config.token),
@@ -265,7 +267,7 @@ async function fetchDiaries(config, fromDate, toDate) {
     const data = (await response.json());
     return data.diaries || [];
 }
-async function confirmDays(dates) {
+async function confirmDays(dates, force = false) {
     const config = getConfig();
     const err = validateConfig(config);
     if (err)
@@ -288,14 +290,19 @@ async function confirmDays(dates) {
         const wanted = new Set(dates);
         const toConfirm = [];
         const alreadyConfirmed = [];
+        const noTimeRegistered = [];
         const notFound = new Set(dates);
         for (const day of diaries) {
             const dayDate = (day.date || "").substring(0, 10);
             if (!wanted.has(dayDate))
                 continue;
             notFound.delete(dayDate);
+            const workedHours = parseFloat(day.workedTimeFormatted?.values?.[0] || "0");
             if (day.accepted === true) {
                 alreadyConfirmed.push(dayDate);
+            }
+            else if (workedHours <= 0 && !force) {
+                noTimeRegistered.push(dayDate);
             }
             else if (day.diarySummaryId) {
                 toConfirm.push({ date: dayDate, diarySummaryId: day.diarySummaryId });
@@ -306,12 +313,20 @@ async function confirmDays(dates) {
                 error: `No diary found for dates: ${[...notFound].join(", ")}`,
             };
         }
+        if (noTimeRegistered.length > 0 && toConfirm.length === 0) {
+            return {
+                error: `No time registered on: ${noTimeRegistered.join(", ")}. ` +
+                    `Fill the day first (woffu_complete_day) or retry with force=true.`,
+                already_confirmed: alreadyConfirmed,
+            };
+        }
         if (toConfirm.length === 0) {
             return {
                 status: "success",
                 action: "confirm_days",
                 confirmed: [],
                 already_confirmed: alreadyConfirmed,
+                skipped_no_time: noTimeRegistered,
                 message: "Nothing to confirm",
             };
         }
@@ -332,6 +347,11 @@ async function confirmDays(dates) {
             action: "confirm_days",
             confirmed: toConfirm.map((d) => d.date),
             already_confirmed: alreadyConfirmed,
+            skipped_no_time: noTimeRegistered,
+            ...(noTimeRegistered.length > 0 && {
+                warning: `NOT confirmed (no time registered): ${noTimeRegistered.join(", ")}. ` +
+                    `Fill them first or use force=true.`,
+            }),
         };
     }
     catch (e) {
@@ -431,7 +451,7 @@ async function getSchedule() {
         return { error: `Request failed: ${e}` };
     }
 }
-async function completeDay(date, slots, confirm = true) {
+async function completeDay(date, slots, confirm = false) {
     const config = getConfig();
     const err = validateConfig(config);
     if (err)
@@ -453,7 +473,23 @@ async function completeDay(date, slots, confirm = true) {
     }
     const url = `${config.baseUrl}/api/svc/core/users/${config.userId}/diarysummaries/workday/slots/self`;
     const formattedSlots = [];
-    const timestamp = Date.now();
+    const makeSign = (time, signIn) => ({
+        signId: 0,
+        userId: parseInt(config.userId),
+        date: `${date}T${time}`,
+        trueDate: `${date}T${time}`,
+        signIn,
+        time,
+        valueTime: time,
+        shortTime: time,
+        shortTrueTime: time,
+        shortValueTime: time,
+        utcTime: `${time} +0`,
+        signType: 3,
+        signStatus: 0,
+        deviceType: 0,
+        deleted: false,
+    });
     for (let i = 0; i < slots.length; i++) {
         const slot = slots[i];
         const inTime = slot.in_time || "08:00";
@@ -487,45 +523,13 @@ async function completeDay(date, slots, confirm = true) {
         if (totalMin <= 0) {
             return { error: `out_time must be after in_time in slot ${i + 1}` };
         }
-        const slotData = {
-            id: `${timestamp}-${i}`,
-            in: {
-                signId: 0,
-                userId: parseInt(config.userId),
-                date: `${date}T${inHour.toString().padStart(2, "0")}:00:00.000Z`,
-                trueDate: `${date}T${inHour.toString().padStart(2, "0")}:00:00.000Z`,
-                signIn: true,
-                time: `${inHour.toString().padStart(2, "0")}:${inMin.toString().padStart(2, "0")}:00`,
-                valueTime: `${inHour.toString().padStart(2, "0")}:${inMin.toString().padStart(2, "0")}:00`,
-                shortTime: `${inHour.toString().padStart(2, "0")}:${inMin.toString().padStart(2, "0")}:00`,
-                shortTrueTime: `${inHour.toString().padStart(2, "0")}:${inMin.toString().padStart(2, "0")}:00`,
-                shortValueTime: `${inHour.toString().padStart(2, "0")}:${inMin.toString().padStart(2, "0")}:00`,
-                utcTime: `${inHour.toString().padStart(2, "0")}:${inMin.toString().padStart(2, "0")}:00 +0`,
-                signType: 3,
-                signStatus: 1,
-                deviceType: 0,
-                deleted: false,
-            },
-            out: {
-                signId: 0,
-                userId: parseInt(config.userId),
-                date: `${date}T${outHour.toString().padStart(2, "0")}:00:00.000Z`,
-                trueDate: `${date}T${outHour.toString().padStart(2, "0")}:00:00.000Z`,
-                signIn: false,
-                time: `${outHour.toString().padStart(2, "0")}:${outMin.toString().padStart(2, "0")}:00`,
-                valueTime: `${outHour.toString().padStart(2, "0")}:${outMin.toString().padStart(2, "0")}:00`,
-                shortTime: `${outHour.toString().padStart(2, "0")}:${outMin.toString().padStart(2, "0")}:00`,
-                shortTrueTime: `${outHour.toString().padStart(2, "0")}:${outMin.toString().padStart(2, "0")}:00`,
-                shortValueTime: `${outHour.toString().padStart(2, "0")}:${outMin.toString().padStart(2, "0")}:00`,
-                utcTime: `${outHour.toString().padStart(2, "0")}:${outMin.toString().padStart(2, "0")}:00 +0`,
-                signType: 3,
-                signStatus: 1,
-                deviceType: 0,
-                deleted: false,
-            },
-            totalMin,
-        };
-        formattedSlots.push(slotData);
+        const inStr = `${inHour.toString().padStart(2, "0")}:${inMin.toString().padStart(2, "0")}:00`;
+        const outStr = `${outHour.toString().padStart(2, "0")}:${outMin.toString().padStart(2, "0")}:00`;
+        formattedSlots.push({
+            in: makeSign(inStr, true),
+            out: makeSign(outStr, false),
+            motive: null,
+        });
     }
     const payload = {
         date,
@@ -550,7 +554,9 @@ async function completeDay(date, slots, confirm = true) {
             slots_count: formattedSlots.length,
         };
         if (confirm) {
-            result.confirmation = await confirmDays([date]);
+            // Force: worked time is recalculated asynchronously, so the freshly
+            // written slots may not be reflected yet.
+            result.confirmation = await confirmDays([date], true);
         }
         return result;
     }
@@ -662,8 +668,8 @@ const TOOLS = [
                 },
                 confirm: {
                     type: "boolean",
-                    description: "Confirm (accept) the day after filling it. Default: true.",
-                    default: true,
+                    description: "Confirm (accept) the day after filling it. Default: false.",
+                    default: false,
                 },
             },
             required: ["date", "slots"],
@@ -681,6 +687,11 @@ const TOOLS = [
                     description: "Dates to confirm (YYYY-MM-DD)",
                     items: { type: "string" },
                     minItems: 1,
+                },
+                force: {
+                    type: "boolean",
+                    description: "Confirm even if the day has no time registered. Default: false.",
+                    default: false,
                 },
             },
             required: ["dates"],
@@ -727,10 +738,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             result = await getSchedule();
             break;
         case "woffu_complete_day":
-            result = await completeDay(args?.date || "", args?.slots || [], args?.confirm !== false);
+            result = await completeDay(args?.date || "", args?.slots || [], args?.confirm === true);
             break;
         case "woffu_confirm_day":
-            result = await confirmDays(args?.dates || []);
+            result = await confirmDays(args?.dates || [], args?.force === true);
             break;
         default:
             result = { error: `Unknown tool: ${name}` };
