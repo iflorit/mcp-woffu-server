@@ -249,6 +249,95 @@ async function getDayDetail(date) {
         return { error: `Request failed: ${e}` };
     }
 }
+async function fetchDiaries(config, fromDate, toDate) {
+    const url = `${config.baseUrl}/api/svc/core/diariesquery/users/${config.userId}` +
+        `/diaries/summary/presence?userId=${config.userId}` +
+        `&fromDate=${fromDate}&toDate=${toDate}` +
+        `&pageSize=31&includeHourTypes=true&includeNotHourTypes=true&includeDifference=true`;
+    const response = await fetch(url, {
+        method: "GET",
+        headers: getHeaders(config.token),
+    });
+    if (!response.ok) {
+        const text = await response.text();
+        return { error: `HTTP error: ${response.status}`, details: text };
+    }
+    const data = (await response.json());
+    return data.diaries || [];
+}
+async function confirmDays(dates) {
+    const config = getConfig();
+    const err = validateConfig(config);
+    if (err)
+        return { error: err };
+    if (!dates || dates.length === 0) {
+        return { error: "At least one date is required" };
+    }
+    for (const date of dates) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || isNaN(new Date(date).getTime())) {
+            return { error: `Invalid date: ${date}. Use YYYY-MM-DD format.` };
+        }
+    }
+    const sorted = [...dates].sort();
+    const fromDate = sorted[0];
+    const toDate = sorted[sorted.length - 1];
+    try {
+        const diaries = await fetchDiaries(config, fromDate, toDate);
+        if (!Array.isArray(diaries))
+            return diaries;
+        const wanted = new Set(dates);
+        const toConfirm = [];
+        const alreadyConfirmed = [];
+        const notFound = new Set(dates);
+        for (const day of diaries) {
+            const dayDate = (day.date || "").substring(0, 10);
+            if (!wanted.has(dayDate))
+                continue;
+            notFound.delete(dayDate);
+            if (day.accepted === true) {
+                alreadyConfirmed.push(dayDate);
+            }
+            else if (day.diarySummaryId) {
+                toConfirm.push({ date: dayDate, diarySummaryId: day.diarySummaryId });
+            }
+        }
+        if (notFound.size > 0) {
+            return {
+                error: `No diary found for dates: ${[...notFound].join(", ")}`,
+            };
+        }
+        if (toConfirm.length === 0) {
+            return {
+                status: "success",
+                action: "confirm_days",
+                confirmed: [],
+                already_confirmed: alreadyConfirmed,
+                message: "Nothing to confirm",
+            };
+        }
+        const url = `${config.baseUrl}/api/svc/core/diariesquery/users/diarysummaries/confirm`;
+        const response = await fetch(url, {
+            method: "PUT",
+            headers: getHeaders(config.token),
+            body: JSON.stringify({
+                diarySummaryIds: toConfirm.map((d) => d.diarySummaryId),
+            }),
+        });
+        if (!response.ok) {
+            const text = await response.text();
+            return { error: `HTTP error: ${response.status}`, details: text };
+        }
+        return {
+            status: "success",
+            action: "confirm_days",
+            confirmed: toConfirm.map((d) => d.date),
+            already_confirmed: alreadyConfirmed,
+        };
+    }
+    catch (e) {
+        return { error: `Request failed: ${e}` };
+    }
+}
 async function getPendingDays(year, month) {
     const config = getConfig();
     const err = validateConfig(config);
@@ -280,15 +369,16 @@ async function getPendingDays(year, month) {
         const data = (await response.json());
         const pendingDays = [];
         const today = now.toISOString().split("T")[0];
-        for (const day of data.Diaries || []) {
-            const dayDate = (day.Date || "").substring(0, 10);
-            const workedSeconds = day.WorkedSeconds || 0;
-            const expectedSeconds = day.ExpectedSeconds || 0;
-            if (expectedSeconds > 0 && workedSeconds === 0 && dayDate <= today) {
+        for (const day of data.diaries || []) {
+            const dayDate = (day.date || "").substring(0, 10);
+            const isWorkday = !day.isWeekend && !day.isHoliday;
+            const workedHours = parseFloat(day.workedTimeFormatted?.values?.[0] || "0");
+            if (isWorkday && workedHours === 0 && dayDate <= today) {
                 pendingDays.push({
                     date: dayDate,
-                    expected_hours: expectedSeconds / 3600,
-                    day_type: day.DayTypeName || "",
+                    diary_summary_id: day.diarySummaryId,
+                    confirmed: day.accepted === true,
+                    schedule: `${day.in || ""}-${day.out || ""}`,
                 });
             }
         }
@@ -570,6 +660,23 @@ const TOOLS = [
             required: ["date", "slots"],
         },
     },
+    {
+        name: "woffu_confirm_day",
+        description: "Confirm (confirmar) one or more workday diaries in Woffu. Marks the day's " +
+            "time records as reviewed/accepted by the employee. Days already confirmed are skipped.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                dates: {
+                    type: "array",
+                    description: "Dates to confirm (YYYY-MM-DD)",
+                    items: { type: "string" },
+                    minItems: 1,
+                },
+            },
+            required: ["dates"],
+        },
+    },
 ];
 const server = new Server({
     name: "woffu",
@@ -612,6 +719,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             break;
         case "woffu_complete_day":
             result = await completeDay(args?.date || "", args?.slots || []);
+            break;
+        case "woffu_confirm_day":
+            result = await confirmDays(args?.dates || []);
             break;
         default:
             result = { error: `Unknown tool: ${name}` };

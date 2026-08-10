@@ -9,6 +9,7 @@ A Model Context Protocol (MCP) server for Woffu time tracking integration. This 
 - **Week/Month Summary**: Get a comprehensive overview of your worked hours
 - **Complete Past Days**: Fill in missing time entries for past dates
 - **Pending Days**: View days without logged hours
+- **Confirm Days**: Confirm (accept) workday diaries
 
 ## Installation
 
@@ -239,6 +240,20 @@ Complete or edit time entries for a past day.
     {"in_time": "09:00", "out_time": "14:00"},
     {"in_time": "15:00", "out_time": "18:00"}
   ]
+}
+```
+
+### `woffu_confirm_day`
+
+Confirm (accept) one or more workday diaries, marking the day's records as reviewed by the employee. Already-confirmed days are skipped.
+
+**Parameters**:
+- `dates`: List of dates in YYYY-MM-DD format
+
+**Example**:
+```json
+{
+  "dates": ["2024-01-10", "2024-01-11"]
 }
 ```
 
