@@ -312,6 +312,9 @@ async function getDayDetail(
 interface DiaryEntry {
   date?: string;
   diaryId?: number;
+  isEvent?: boolean;
+  absenceEvents?: unknown[] | null;
+  pendingAbsenceEvents?: unknown[] | null;
   diarySummaryId?: number;
   accepted?: boolean | null;
   isWeekend?: boolean;
@@ -631,7 +634,8 @@ interface TimeSlot {
 async function completeDay(
   date: string,
   slots: TimeSlot[],
-  confirm: boolean = false
+  confirm: boolean = false,
+  force: boolean = false
 ): Promise<Record<string, unknown>> {
   const config = getConfig();
   const err = validateConfig(config);
@@ -660,6 +664,22 @@ async function completeDay(
   const diary = diaries.find((d) => (d.date || "").substring(0, 10) === date);
   if (!diary?.diaryId) {
     return { error: `No diary found for date: ${date}` };
+  }
+  if (!force) {
+    const reasons: string[] = [];
+    if (diary.isWeekend) reasons.push("weekend");
+    if (diary.isHoliday) reasons.push("holiday");
+    if (diary.isEvent) reasons.push("calendar event");
+    if ((diary.absenceEvents?.length || 0) > 0) reasons.push("absence/vacation");
+    if ((diary.pendingAbsenceEvents?.length || 0) > 0)
+      reasons.push("pending absence request");
+    if (reasons.length > 0) {
+      return {
+        error:
+          `Day ${date} is not a regular workday (${reasons.join(", ")}). ` +
+          `Retry with force=true to fill it anyway.`,
+      };
+    }
   }
   if (diary.accepted === true) {
     return {
@@ -900,6 +920,13 @@ const TOOLS: Tool[] = [
             "Confirm (accept) the day after filling it. Default: false.",
           default: false,
         },
+        force: {
+          type: "boolean",
+          description:
+            "Fill even if the day is a weekend, holiday, event, or has " +
+            "absences/vacations. Default: false.",
+          default: false,
+        },
       },
       required: ["date", "slots"],
     },
@@ -1004,7 +1031,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       result = await completeDay(
         (args?.date as string) || "",
         (args?.slots as TimeSlot[]) || [],
-        args?.confirm === true
+        args?.confirm === true,
+        args?.force === true
       );
       break;
     case "woffu_confirm_day":

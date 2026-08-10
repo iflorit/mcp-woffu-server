@@ -232,6 +232,7 @@ Complete or edit time entries for a past day.
 - `date`: Date in YYYY-MM-DD format
 - `slots`: List of time slots with `in_time` and `out_time` (HH:MM format)
 - `confirm` (optional, default `false`): confirm (accept) the day right after filling it. Confirmation requires registered time unless forced.
+- `force` (optional, default `false`): fill even if the day is a weekend, holiday, calendar event, or has absences/vacations (refused otherwise)
 
 **Example**:
 ```json

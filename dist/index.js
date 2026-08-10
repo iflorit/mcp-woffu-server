@@ -491,7 +491,7 @@ async function getSchedule() {
         return { error: `Request failed: ${e}` };
     }
 }
-async function completeDay(date, slots, confirm = false) {
+async function completeDay(date, slots, confirm = false, force = false) {
     const config = getConfig();
     const err = validateConfig(config);
     if (err)
@@ -517,6 +517,25 @@ async function completeDay(date, slots, confirm = false) {
     const diary = diaries.find((d) => (d.date || "").substring(0, 10) === date);
     if (!diary?.diaryId) {
         return { error: `No diary found for date: ${date}` };
+    }
+    if (!force) {
+        const reasons = [];
+        if (diary.isWeekend)
+            reasons.push("weekend");
+        if (diary.isHoliday)
+            reasons.push("holiday");
+        if (diary.isEvent)
+            reasons.push("calendar event");
+        if ((diary.absenceEvents?.length || 0) > 0)
+            reasons.push("absence/vacation");
+        if ((diary.pendingAbsenceEvents?.length || 0) > 0)
+            reasons.push("pending absence request");
+        if (reasons.length > 0) {
+            return {
+                error: `Day ${date} is not a regular workday (${reasons.join(", ")}). ` +
+                    `Retry with force=true to fill it anyway.`,
+            };
+        }
     }
     if (diary.accepted === true) {
         return {
@@ -729,6 +748,12 @@ const TOOLS = [
                     description: "Confirm (accept) the day after filling it. Default: false.",
                     default: false,
                 },
+                force: {
+                    type: "boolean",
+                    description: "Fill even if the day is a weekend, holiday, event, or has " +
+                        "absences/vacations. Default: false.",
+                    default: false,
+                },
             },
             required: ["date", "slots"],
         },
@@ -813,7 +838,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             result = await getSchedule();
             break;
         case "woffu_complete_day":
-            result = await completeDay(args?.date || "", args?.slots || [], args?.confirm === true);
+            result = await completeDay(args?.date || "", args?.slots || [], args?.confirm === true, args?.force === true);
             break;
         case "woffu_confirm_day":
             result = await confirmDays(args?.dates || [], args?.force === true);
