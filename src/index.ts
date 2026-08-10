@@ -554,7 +554,8 @@ interface TimeSlot {
 
 async function completeDay(
   date: string,
-  slots: TimeSlot[]
+  slots: TimeSlot[],
+  confirm: boolean = true
 ): Promise<Record<string, unknown>> {
   const config = getConfig();
   const err = validateConfig(config);
@@ -686,12 +687,18 @@ async function completeDay(
       return { error: `HTTP error: ${response.status}`, details: text };
     }
 
-    return {
+    const result: Record<string, unknown> = {
       status: "success",
       action: "complete_day",
       date,
       slots_count: formattedSlots.length,
     };
+
+    if (confirm) {
+      result.confirmation = await confirmDays([date]);
+    }
+
+    return result;
   } catch (e) {
     return { error: `Request failed: ${e}` };
   }
@@ -803,6 +810,12 @@ const TOOLS: Tool[] = [
             required: ["in_time", "out_time"],
           },
         },
+        confirm: {
+          type: "boolean",
+          description:
+            "Confirm (accept) the day after filling it. Default: true.",
+          default: true,
+        },
       },
       required: ["date", "slots"],
     },
@@ -882,7 +895,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     case "woffu_complete_day":
       result = await completeDay(
         (args?.date as string) || "",
-        (args?.slots as TimeSlot[]) || []
+        (args?.slots as TimeSlot[]) || [],
+        args?.confirm !== false
       );
       break;
     case "woffu_confirm_day":

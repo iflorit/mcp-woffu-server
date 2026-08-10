@@ -231,6 +231,7 @@ Complete or edit time entries for a past day.
 **Parameters**:
 - `date`: Date in YYYY-MM-DD format
 - `slots`: List of time slots with `in_time` and `out_time` (HH:MM format)
+- `confirm` (optional, default `true`): confirm (accept) the day right after filling it
 
 **Example**:
 ```json

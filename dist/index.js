@@ -431,7 +431,7 @@ async function getSchedule() {
         return { error: `Request failed: ${e}` };
     }
 }
-async function completeDay(date, slots) {
+async function completeDay(date, slots, confirm = true) {
     const config = getConfig();
     const err = validateConfig(config);
     if (err)
@@ -543,12 +543,16 @@ async function completeDay(date, slots) {
             const text = await response.text();
             return { error: `HTTP error: ${response.status}`, details: text };
         }
-        return {
+        const result = {
             status: "success",
             action: "complete_day",
             date,
             slots_count: formattedSlots.length,
         };
+        if (confirm) {
+            result.confirmation = await confirmDays([date]);
+        }
+        return result;
     }
     catch (e) {
         return { error: `Request failed: ${e}` };
@@ -656,6 +660,11 @@ const TOOLS = [
                         required: ["in_time", "out_time"],
                     },
                 },
+                confirm: {
+                    type: "boolean",
+                    description: "Confirm (accept) the day after filling it. Default: true.",
+                    default: true,
+                },
             },
             required: ["date", "slots"],
         },
@@ -718,7 +727,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             result = await getSchedule();
             break;
         case "woffu_complete_day":
-            result = await completeDay(args?.date || "", args?.slots || []);
+            result = await completeDay(args?.date || "", args?.slots || [], args?.confirm !== false);
             break;
         case "woffu_confirm_day":
             result = await confirmDays(args?.dates || []);
