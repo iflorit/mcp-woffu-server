@@ -311,6 +311,7 @@ async function getDayDetail(
 
 interface DiaryEntry {
   date?: string;
+  diaryId?: number;
   diarySummaryId?: number;
   accepted?: boolean | null;
   isWeekend?: boolean;
@@ -448,6 +449,51 @@ async function confirmDays(
           `NOT confirmed (no time registered): ${noTimeRegistered.join(", ")}. ` +
           `Fill them first or use force=true.`,
       }),
+    };
+  } catch (e) {
+    return { error: `Request failed: ${e}` };
+  }
+}
+
+async function unconfirmDays(
+  dates: string[]
+): Promise<Record<string, unknown>> {
+  const config = getConfig();
+  const err = validateConfig(config);
+  if (err) return { error: err };
+
+  if (!dates || dates.length === 0) {
+    return { error: "At least one date is required" };
+  }
+  for (const date of dates) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || isNaN(new Date(date).getTime())) {
+      return { error: `Invalid date: ${date}. Use YYYY-MM-DD format.` };
+    }
+  }
+
+  const url = `${config.baseUrl}/api/svc/core/users/diarysummaries/accept`;
+  try {
+    const response = await fetch(url, {
+      method: "PUT",
+      headers: getHeaders(config.token),
+      body: JSON.stringify({
+        acceptDiarySummaries: dates.map((date) => ({
+          userId: parseInt(config.userId),
+          date,
+          accepted: false,
+        })),
+      }),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      return { error: `HTTP error: ${response.status}`, details: text };
+    }
+
+    return {
+      status: "success",
+      action: "unconfirm_days",
+      unconfirmed: dates,
     };
   } catch (e) {
     return { error: `Request failed: ${e}` };
@@ -609,7 +655,22 @@ async function completeDay(
     return { error: "At least one time slot is required" };
   }
 
-  const url = `${config.baseUrl}/api/svc/core/users/${config.userId}/diarysummaries/workday/slots/self`;
+  const diaries = await fetchDiaries(config, date, date);
+  if (!Array.isArray(diaries)) return diaries;
+  const diary = diaries.find((d) => (d.date || "").substring(0, 10) === date);
+  if (!diary?.diaryId) {
+    return { error: `No diary found for date: ${date}` };
+  }
+  if (diary.accepted === true) {
+    return {
+      error:
+        `Day ${date} is confirmed and locked for editing. ` +
+        `Unconfirm it first with woffu_unconfirm_day.`,
+    };
+  }
+  const diaryId = diary.diaryId;
+
+  const url = `${config.baseUrl}/api/diaries/${diaryId}/workday/slots/self`;
 
   const formattedSlots: Array<Record<string, unknown>> = [];
 
@@ -685,6 +746,7 @@ async function completeDay(
   }
 
   const payload = {
+    diaryId,
     date,
     comments: "",
     userId: parseInt(config.userId),
@@ -708,6 +770,10 @@ async function completeDay(
       action: "complete_day",
       date,
       slots_count: formattedSlots.length,
+      note:
+        "Woffu persists and recalculates asynchronously. Verify with " +
+        "woffu_day_detail; closed periods (e.g. past months) may silently " +
+        "discard the write.",
     };
 
     if (confirm) {
@@ -862,6 +928,24 @@ const TOOLS: Tool[] = [
       required: ["dates"],
     },
   },
+  {
+    name: "woffu_unconfirm_day",
+    description:
+      "Unconfirm (revert acceptance of) one or more workday diaries in Woffu, " +
+      "unlocking them for editing again.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        dates: {
+          type: "array",
+          description: "Dates to unconfirm (YYYY-MM-DD)",
+          items: { type: "string" },
+          minItems: 1,
+        },
+      },
+      required: ["dates"],
+    },
+  },
 ];
 
 const server = new Server(
@@ -928,6 +1012,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         (args?.dates as string[]) || [],
         args?.force === true
       );
+      break;
+    case "woffu_unconfirm_day":
+      result = await unconfirmDays((args?.dates as string[]) || []);
       break;
     default:
       result = { error: `Unknown tool: ${name}` };

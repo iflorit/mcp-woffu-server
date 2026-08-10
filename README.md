@@ -248,8 +248,11 @@ Complete or edit time entries for a past day.
 
 Confirm (accept) one or more workday diaries, marking the day's records as reviewed by the employee. Already-confirmed days are skipped.
 
+Refuses days without registered time unless `force: true`.
+
 **Parameters**:
 - `dates`: List of dates in YYYY-MM-DD format
+- `force` (optional, default `false`): confirm even with no time registered
 
 **Example**:
 ```json
@@ -257,6 +260,13 @@ Confirm (accept) one or more workday diaries, marking the day's records as revie
   "dates": ["2024-01-10", "2024-01-11"]
 }
 ```
+
+### `woffu_unconfirm_day`
+
+Unconfirm (revert acceptance of) one or more workday diaries, unlocking them for editing again. Confirmed days are locked: `woffu_complete_day` refuses them until unconfirmed.
+
+**Parameters**:
+- `dates`: List of dates in YYYY-MM-DD format
 
 ## Example Conversations with Claude
 

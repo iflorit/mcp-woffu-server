@@ -358,6 +358,46 @@ async function confirmDays(dates, force = false) {
         return { error: `Request failed: ${e}` };
     }
 }
+async function unconfirmDays(dates) {
+    const config = getConfig();
+    const err = validateConfig(config);
+    if (err)
+        return { error: err };
+    if (!dates || dates.length === 0) {
+        return { error: "At least one date is required" };
+    }
+    for (const date of dates) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || isNaN(new Date(date).getTime())) {
+            return { error: `Invalid date: ${date}. Use YYYY-MM-DD format.` };
+        }
+    }
+    const url = `${config.baseUrl}/api/svc/core/users/diarysummaries/accept`;
+    try {
+        const response = await fetch(url, {
+            method: "PUT",
+            headers: getHeaders(config.token),
+            body: JSON.stringify({
+                acceptDiarySummaries: dates.map((date) => ({
+                    userId: parseInt(config.userId),
+                    date,
+                    accepted: false,
+                })),
+            }),
+        });
+        if (!response.ok) {
+            const text = await response.text();
+            return { error: `HTTP error: ${response.status}`, details: text };
+        }
+        return {
+            status: "success",
+            action: "unconfirm_days",
+            unconfirmed: dates,
+        };
+    }
+    catch (e) {
+        return { error: `Request failed: ${e}` };
+    }
+}
 async function getPendingDays(year, month) {
     const config = getConfig();
     const err = validateConfig(config);
@@ -471,7 +511,21 @@ async function completeDay(date, slots, confirm = false) {
     if (!slots || slots.length === 0) {
         return { error: "At least one time slot is required" };
     }
-    const url = `${config.baseUrl}/api/svc/core/users/${config.userId}/diarysummaries/workday/slots/self`;
+    const diaries = await fetchDiaries(config, date, date);
+    if (!Array.isArray(diaries))
+        return diaries;
+    const diary = diaries.find((d) => (d.date || "").substring(0, 10) === date);
+    if (!diary?.diaryId) {
+        return { error: `No diary found for date: ${date}` };
+    }
+    if (diary.accepted === true) {
+        return {
+            error: `Day ${date} is confirmed and locked for editing. ` +
+                `Unconfirm it first with woffu_unconfirm_day.`,
+        };
+    }
+    const diaryId = diary.diaryId;
+    const url = `${config.baseUrl}/api/diaries/${diaryId}/workday/slots/self`;
     const formattedSlots = [];
     const makeSign = (time, signIn) => ({
         signId: 0,
@@ -532,6 +586,7 @@ async function completeDay(date, slots, confirm = false) {
         });
     }
     const payload = {
+        diaryId,
         date,
         comments: "",
         userId: parseInt(config.userId),
@@ -552,6 +607,9 @@ async function completeDay(date, slots, confirm = false) {
             action: "complete_day",
             date,
             slots_count: formattedSlots.length,
+            note: "Woffu persists and recalculates asynchronously. Verify with " +
+                "woffu_day_detail; closed periods (e.g. past months) may silently " +
+                "discard the write.",
         };
         if (confirm) {
             // Force: worked time is recalculated asynchronously, so the freshly
@@ -697,6 +755,23 @@ const TOOLS = [
             required: ["dates"],
         },
     },
+    {
+        name: "woffu_unconfirm_day",
+        description: "Unconfirm (revert acceptance of) one or more workday diaries in Woffu, " +
+            "unlocking them for editing again.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                dates: {
+                    type: "array",
+                    description: "Dates to unconfirm (YYYY-MM-DD)",
+                    items: { type: "string" },
+                    minItems: 1,
+                },
+            },
+            required: ["dates"],
+        },
+    },
 ];
 const server = new Server({
     name: "woffu",
@@ -742,6 +817,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             break;
         case "woffu_confirm_day":
             result = await confirmDays(args?.dates || [], args?.force === true);
+            break;
+        case "woffu_unconfirm_day":
+            result = await unconfirmDays(args?.dates || []);
             break;
         default:
             result = { error: `Unknown tool: ${name}` };
