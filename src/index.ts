@@ -232,10 +232,38 @@ async function getWeekSummary(
       return { error: `HTTP error: ${response.status}`, details: text };
     }
 
-    const data = (await response.json()) as Record<string, unknown>;
+    const data = (await response.json()) as {
+      diaries?: DiaryEntry[];
+      [k: string]: unknown;
+    };
     const weekNumber = getWeekNumber(targetDate);
+
+    // Real hours from persisted signs per day (the presence projection lags).
+    const days: Array<Record<string, unknown>> = [];
+    for (const diary of data.diaries || []) {
+      const dayDate = (diary.date || "").substring(0, 10);
+      if (!dayDate) continue;
+      const entry: Record<string, unknown> = {
+        date: dayDate,
+        is_weekend: diary.isWeekend || false,
+        is_holiday: diary.isHoliday || false,
+        has_absence: (diary.absenceEvents?.length || 0) > 0,
+        confirmed: diary.accepted === true,
+      };
+      if (!diary.isWeekend && !diary.isHoliday) {
+        const wd = await fetchWorkday(config, dayDate);
+        if (!("error" in wd)) {
+          const signed = signedHours(wd);
+          entry.signed_hours = signed.hours;
+          entry.signed_slots = signed.slots;
+        }
+      }
+      days.push(entry);
+    }
+
     return {
       ...data,
+      signed_days: days,
       week_info: {
         from_date: fromDate,
         to_date: toDate,
@@ -301,6 +329,13 @@ async function getDayDetail(
     const result: Record<string, unknown> = { date, summary: summaryData };
     if (signsResponse.ok) {
       result.signs = await signsResponse.json();
+    }
+
+    const wd = await fetchWorkday(config, date);
+    if (!("error" in wd)) {
+      const signed = signedHours(wd);
+      result.signed_slots = signed.slots;
+      result.signed_hours = signed.hours;
     }
 
     return result;
@@ -456,6 +491,56 @@ async function confirmDays(
   } catch (e) {
     return { error: `Request failed: ${e}` };
   }
+}
+
+interface WorkdayData {
+  diarySummaryWorkday?: Record<string, unknown>;
+  signSlots?: Array<{
+    in?: { signId?: number; time?: string };
+    out?: { signId?: number; time?: string };
+  }>;
+}
+
+async function fetchWorkday(
+  config: Config,
+  date: string
+): Promise<WorkdayData & { error?: string; details?: string }> {
+  const url =
+    `${config.baseUrl}/api/svc/core/users/${config.userId}` +
+    `/diarysummaries/workday/slots?date=${date}`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: getHeaders(config.token),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    return { error: `HTTP error: ${response.status}`, details: text };
+  }
+  return (await response.json()) as WorkdayData;
+}
+
+function toMinutes(t: string): number {
+  const [h, m] = t.split(":");
+  return parseInt(h) * 60 + parseInt(m);
+}
+
+/** Worked hours computed from persisted signs (signId > 0). The presence
+ * summary lags behind (async projection), so this is the source of truth. */
+function signedHours(wd: WorkdayData): {
+  hours: number;
+  slots: Array<{ in: string; out: string }>;
+} {
+  const slots: Array<{ in: string; out: string }> = [];
+  let minutes = 0;
+  for (const s of wd.signSlots || []) {
+    const inT = s.in?.time;
+    const outT = s.out?.time;
+    if ((s.in?.signId || 0) > 0 && inT && outT) {
+      slots.push({ in: inT, out: outT });
+      minutes += toMinutes(outT) - toMinutes(inT);
+    }
+  }
+  return { hours: minutes / 60, slots };
 }
 
 async function unconfirmDays(
@@ -655,10 +740,6 @@ async function completeDay(
     };
   }
 
-  if (!slots || slots.length === 0) {
-    return { error: "At least one time slot is required" };
-  }
-
   const diaries = await fetchDiaries(config, date, date);
   if (!Array.isArray(diaries)) return diaries;
   const diary = diaries.find((d) => (d.date || "").substring(0, 10) === date);
@@ -689,6 +770,31 @@ async function completeDay(
     };
   }
   const diaryId = diary.diaryId;
+
+  if (!slots || slots.length === 0) {
+    // Default to the assigned schedule for the day.
+    const wd = await fetchWorkday(config, date);
+    if (wd.error) return { error: wd.error, details: wd.details };
+    const sched = (wd.diarySummaryWorkday || {}) as Record<string, string>;
+    const trim = (t?: string) => (t ? t.substring(0, 5) : "");
+    if (sched.startTime && sched.endTime1 && sched.startTime2) {
+      slots = [
+        { in_time: trim(sched.startTime), out_time: trim(sched.endTime1) },
+        {
+          in_time: trim(sched.startTime2),
+          out_time: trim(sched.endTime2 || sched.endTime),
+        },
+      ];
+    } else if (sched.startTime && sched.endTime) {
+      slots = [
+        { in_time: trim(sched.startTime), out_time: trim(sched.endTime) },
+      ];
+    } else {
+      return {
+        error: `No slots given and no schedule found for ${date}`,
+      };
+    }
+  }
 
   const url = `${config.baseUrl}/api/diaries/${diaryId}/workday/slots/self`;
 
@@ -904,7 +1010,9 @@ const TOOLS: Tool[] = [
         date: { type: "string", description: "Date (YYYY-MM-DD)" },
         slots: {
           type: "array",
-          description: "Time slots: [{in_time: 'HH:MM', out_time: 'HH:MM'}, ...]",
+          description:
+            "Time slots: [{in_time: 'HH:MM', out_time: 'HH:MM'}, ...]. " +
+            "Omit to use the day's assigned schedule.",
           items: {
             type: "object",
             properties: {
@@ -928,7 +1036,7 @@ const TOOLS: Tool[] = [
           default: false,
         },
       },
-      required: ["date", "slots"],
+      required: ["date"],
     },
   },
   {
