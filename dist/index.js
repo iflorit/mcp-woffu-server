@@ -335,7 +335,11 @@ async function confirmDays(dates, force = false) {
                 noTimeRegistered.push(dayDate);
             }
             else if (day.diarySummaryId) {
-                toConfirm.push({ date: dayDate, diarySummaryId: day.diarySummaryId });
+                toConfirm.push({
+                    date: dayDate,
+                    diarySummaryId: day.diarySummaryId,
+                    invalidated: day.accepted === false,
+                });
             }
         }
         if (notFound.size > 0) {
@@ -359,6 +363,29 @@ async function confirmDays(dates, force = false) {
                 skipped_no_time: noTimeRegistered,
                 message: "Nothing to confirm",
             };
+        }
+        // Days edited after a confirmation end up with accepted=false, a state the
+        // confirm endpoint silently ignores. Reset them to pending (null) first.
+        const invalidated = toConfirm.filter((d) => d.invalidated);
+        if (invalidated.length > 0) {
+            const resetResponse = await fetch(`${config.baseUrl}/api/svc/core/users/diarysummaries/accept`, {
+                method: "PUT",
+                headers: getHeaders(config.token),
+                body: JSON.stringify({
+                    acceptDiarySummaries: invalidated.map((d) => ({
+                        userId: parseInt(config.userId),
+                        date: d.date,
+                        accepted: true,
+                    })),
+                }),
+            });
+            if (!resetResponse.ok) {
+                const text = await resetResponse.text();
+                return {
+                    error: `HTTP error resetting invalidated days: ${resetResponse.status}`,
+                    details: text,
+                };
+            }
         }
         const url = `${config.baseUrl}/api/svc/core/diariesquery/users/diarysummaries/confirm`;
         const response = await fetch(url, {

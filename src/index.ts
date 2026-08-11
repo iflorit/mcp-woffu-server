@@ -415,7 +415,11 @@ async function confirmDays(
     if (!Array.isArray(diaries)) return diaries;
 
     const wanted = new Set(dates);
-    const toConfirm: Array<{ date: string; diarySummaryId: number }> = [];
+    const toConfirm: Array<{
+      date: string;
+      diarySummaryId: number;
+      invalidated: boolean;
+    }> = [];
     const alreadyConfirmed: string[] = [];
     const noTimeRegistered: string[] = [];
     const notFound = new Set(dates);
@@ -432,7 +436,11 @@ async function confirmDays(
       } else if (workedHours <= 0 && !force) {
         noTimeRegistered.push(dayDate);
       } else if (day.diarySummaryId) {
-        toConfirm.push({ date: dayDate, diarySummaryId: day.diarySummaryId });
+        toConfirm.push({
+          date: dayDate,
+          diarySummaryId: day.diarySummaryId,
+          invalidated: day.accepted === false,
+        });
       }
     }
 
@@ -460,6 +468,33 @@ async function confirmDays(
         skipped_no_time: noTimeRegistered,
         message: "Nothing to confirm",
       };
+    }
+
+    // Days edited after a confirmation end up with accepted=false, a state the
+    // confirm endpoint silently ignores. Reset them to pending (null) first.
+    const invalidated = toConfirm.filter((d) => d.invalidated);
+    if (invalidated.length > 0) {
+      const resetResponse = await fetch(
+        `${config.baseUrl}/api/svc/core/users/diarysummaries/accept`,
+        {
+          method: "PUT",
+          headers: getHeaders(config.token),
+          body: JSON.stringify({
+            acceptDiarySummaries: invalidated.map((d) => ({
+              userId: parseInt(config.userId),
+              date: d.date,
+              accepted: true,
+            })),
+          }),
+        }
+      );
+      if (!resetResponse.ok) {
+        const text = await resetResponse.text();
+        return {
+          error: `HTTP error resetting invalidated days: ${resetResponse.status}`,
+          details: text,
+        };
+      }
     }
 
     const url = `${config.baseUrl}/api/svc/core/diariesquery/users/diarysummaries/confirm`;
