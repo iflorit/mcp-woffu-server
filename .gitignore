@@ -29,3 +29,6 @@ coverage/
 
 # TypeScript cache
 *.tsbuildinfo
+scripts/
+set-token.sh
+.env
