@@ -50,4 +50,26 @@ export function checkDayReady(wd) {
         reasons,
     };
 }
+/** Pre-flight for a slot write: refuse before touching Woffu unless the
+ * requested slots would leave the day complete, and unless the day has
+ * persisted signs to edit (the slots endpoint cannot create signs). */
+export function checkWritePlan(wd, requested) {
+    const workingTime = Number(wd.diarySummaryWorkday?.workingTime ?? 0);
+    const required = workingTime > 0 ? workingTime / 3600 : 0;
+    let minutes = 0;
+    for (const s of requested)
+        minutes += toMinutes(s.out_time) - toMinutes(s.in_time);
+    const hours = minutes / 60;
+    const reasons = [];
+    if (requested.length > MAX_SLOTS)
+        reasons.push(`at most ${MAX_SLOTS} slots per day (got ${requested.length})`);
+    if (required <= 0)
+        reasons.push("no scheduled hours for this day");
+    else if (hours + 1e-9 < required)
+        reasons.push(`requested slots total ${hours}h, schedule requires ${required}h`);
+    if (signedHours(wd).slots.length === 0)
+        reasons.push("day has no persisted signs; the slots endpoint can only edit existing " +
+            "signs, so the write would be silently discarded");
+    return { ok: reasons.length === 0, requested_hours: hours, required_hours: required, reasons };
+}
 //# sourceMappingURL=guard.js.map

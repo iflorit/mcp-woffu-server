@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { checkDayReady, signedHours } from "../dist/guard.js";
+import { checkDayReady, checkWritePlan, signedHours } from "../dist/guard.js";
 
 const slot = (i, o, id) => ({
   in: { signId: id, time: i },
@@ -62,4 +62,31 @@ test("open clock-in with placeholder out (signId 0) counts no hours", () => {
   const c = checkDayReady(wd(28800, open("08:00:00", "14:00:00"), open("15:00:00", "17:00:00")));
   assert.equal(c.ok, false);
   assert.equal(c.signed_hours, 0);
+});
+
+const day07 = wd(28800, slot("08:00:00", "14:00:00", 1), slot("15:00:00", "17:00:00", 2));
+const req = (...p) => p.map(([i, o]) => ({ in_time: i, out_time: o }));
+
+test("write plan: refuses fewer hours than the schedule before writing", () => {
+  const c = checkWritePlan(day07, req(["08:00", "14:00"]));
+  assert.equal(c.ok, false);
+  assert.match(c.reasons.join(";"), /total 6h, schedule requires 8h/);
+});
+
+test("write plan: refuses more than 2 slots", () => {
+  const c = checkWritePlan(day07, req(["08:00", "11:00"], ["11:00", "14:00"], ["15:00", "17:00"]));
+  assert.equal(c.ok, false);
+  assert.match(c.reasons.join(";"), /at most 2 slots/);
+});
+
+test("write plan: refuses a day with no persisted signs (write would be dropped)", () => {
+  const empty = wd(28800, slot("08:00:00", "14:00:00", 0), slot("15:00:00", "17:00:00", 0));
+  const c = checkWritePlan(empty, req(["08:00", "14:00"], ["15:00", "17:00"]));
+  assert.equal(c.ok, false);
+  assert.match(c.reasons.join(";"), /no persisted signs/);
+});
+
+test("write plan: 8h in 2 slots on a day with signs is allowed", () => {
+  const c = checkWritePlan(day07, req(["08:00", "14:00"], ["15:00", "17:00"]));
+  assert.deepEqual(c, { ok: true, requested_hours: 8, required_hours: 8, reasons: [] });
 });

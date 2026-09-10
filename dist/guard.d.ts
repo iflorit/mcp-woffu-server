@@ -40,4 +40,16 @@ export interface DayCheck {
 /** A day is ready to confirm when its persisted signs cover the scheduled
  * hours and are compacted into at most MAX_SLOTS slots. */
 export declare function checkDayReady(wd: WorkdayData): DayCheck;
+/** Pre-flight for a slot write: refuse before touching Woffu unless the
+ * requested slots would leave the day complete, and unless the day has
+ * persisted signs to edit (the slots endpoint cannot create signs). */
+export declare function checkWritePlan(wd: WorkdayData, requested: Array<{
+    in_time: string;
+    out_time: string;
+}>): {
+    ok: boolean;
+    requested_hours: number;
+    required_hours: number;
+    reasons: string[];
+};
 //# sourceMappingURL=guard.d.ts.map

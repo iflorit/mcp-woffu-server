@@ -8,7 +8,7 @@
  *   WOFFU_BASE_URL: Base URL (default: https://app.woffu.com)
  */
 
-import { checkDayReady, signedHours, MAX_SLOTS, type WorkdayData } from "./guard.js";
+import { checkDayReady, checkWritePlan, signedHours, type WorkdayData } from "./guard.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -813,9 +813,14 @@ async function completeDay(
     }
   }
 
-  if (slots.length > MAX_SLOTS) {
+  // Never write unless the result is guaranteed to be a complete day.
+  const current = await fetchWorkday(config, date);
+  if (current.error) return { error: current.error, details: current.details };
+  const plan = checkWritePlan(current, slots);
+  if (!plan.ok) {
     return {
-      error: `At most ${MAX_SLOTS} slots per day (got ${slots.length}).`,
+      error: `Refusing to write ${date}: ${plan.reasons.join("; ")}.`,
+      plan,
     };
   }
 
