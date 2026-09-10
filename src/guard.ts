@@ -17,7 +17,9 @@ export function toMinutes(t: string): number {
   return parseInt(h) * 60 + parseInt(m);
 }
 
-/** Worked hours computed from persisted signs (signId > 0). */
+/** Worked hours computed from persisted signs: both in and out must have
+ * signId > 0. A pair with a placeholder out (signId 0) is an open clock-in
+ * whose out is the schedule template, not a persisted sign. */
 export function signedHours(wd: WorkdayData): {
   hours: number;
   slots: Array<{ in: string; out: string }>;
@@ -27,7 +29,7 @@ export function signedHours(wd: WorkdayData): {
   for (const s of wd.signSlots || []) {
     const inT = s.in?.time;
     const outT = s.out?.time;
-    if ((s.in?.signId || 0) > 0 && inT && outT) {
+    if ((s.in?.signId || 0) > 0 && (s.out?.signId || 0) > 0 && inT && outT) {
       slots.push({ in: inT, out: outT });
       minutes += toMinutes(outT) - toMinutes(inT);
     }

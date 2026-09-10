@@ -54,7 +54,12 @@ test("required hours follow the day's schedule (6h Friday)", () => {
   assert.equal(c.required_hours, 6);
 });
 
-test("signedHours ignores unpaired/placeholder slots", () => {
-  const s = signedHours(wd(28800, { in: { signId: 5, time: "08:00:00" }, out: { signId: 0, time: "14:00:00" } }));
-  assert.equal(s.hours, 6); // in is persisted; out time is the placeholder still counted
+test("open clock-in with placeholder out (signId 0) counts no hours", () => {
+  // Shape of a day where the person clocked in but never out: Woffu fills
+  // the out with the schedule template. Two of these must NOT confirm.
+  const open = (i, o) => ({ in: { signId: 5, time: i }, out: { signId: 0, time: o } });
+  assert.equal(signedHours(wd(28800, open("08:00:00", "14:00:00"))).hours, 0);
+  const c = checkDayReady(wd(28800, open("08:00:00", "14:00:00"), open("15:00:00", "17:00:00")));
+  assert.equal(c.ok, false);
+  assert.equal(c.signed_hours, 0);
 });
