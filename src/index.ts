@@ -8,6 +8,7 @@
  *   WOFFU_BASE_URL: Base URL (default: https://app.woffu.com)
  */
 
+import { checkDayReady, signedHours, MAX_SLOTS, type WorkdayData } from "./guard.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -422,20 +423,31 @@ async function confirmDays(
     }> = [];
     const alreadyConfirmed: string[] = [];
     const noTimeRegistered: string[] = [];
+    const notReady: Record<string, string[]> = {};
     const notFound = new Set(dates);
 
     for (const day of diaries) {
       const dayDate = (day.date || "").substring(0, 10);
       if (!wanted.has(dayDate)) continue;
       notFound.delete(dayDate);
-      const workedHours = parseFloat(
-        day.workedTimeFormatted?.values?.[0] || "0"
-      );
       if (day.accepted === true) {
         alreadyConfirmed.push(dayDate);
-      } else if (workedHours <= 0 && !force) {
-        noTimeRegistered.push(dayDate);
-      } else if (day.diarySummaryId) {
+        continue;
+      }
+      if (!force) {
+        // Never confirm a day whose persisted signs don't cover the schedule
+        // or aren't compacted (persisted signs are the source of truth; the
+        // presence summary lags behind).
+        const wd = await fetchWorkday(config, dayDate);
+        if (wd.error) return { error: wd.error, details: wd.details };
+        const check = checkDayReady(wd);
+        if (!check.ok) {
+          noTimeRegistered.push(dayDate);
+          notReady[dayDate] = check.reasons;
+          continue;
+        }
+      }
+      if (day.diarySummaryId) {
         toConfirm.push({
           date: dayDate,
           diarySummaryId: day.diarySummaryId,
@@ -450,12 +462,14 @@ async function confirmDays(
       };
     }
 
+    const describe = (d: string) => `${d} (${notReady[d].join("; ")})`;
     if (noTimeRegistered.length > 0 && toConfirm.length === 0) {
       return {
         error:
-          `No time registered on: ${noTimeRegistered.join(", ")}. ` +
-          `Fill the day first (woffu_complete_day) or retry with force=true.`,
+          `Not ready to confirm: ${noTimeRegistered.map(describe).join(", ")}. ` +
+          `Fill/compact the day first (woffu_complete_day) or retry with force=true.`,
         already_confirmed: alreadyConfirmed,
+        not_ready: notReady,
       };
     }
 
@@ -465,7 +479,7 @@ async function confirmDays(
         action: "confirm_days",
         confirmed: [],
         already_confirmed: alreadyConfirmed,
-        skipped_no_time: noTimeRegistered,
+        skipped_not_ready: notReady,
         message: "Nothing to confirm",
       };
     }
@@ -516,24 +530,16 @@ async function confirmDays(
       action: "confirm_days",
       confirmed: toConfirm.map((d) => d.date),
       already_confirmed: alreadyConfirmed,
-      skipped_no_time: noTimeRegistered,
+      skipped_not_ready: notReady,
       ...(noTimeRegistered.length > 0 && {
         warning:
-          `NOT confirmed (no time registered): ${noTimeRegistered.join(", ")}. ` +
-          `Fill them first or use force=true.`,
+          `NOT confirmed: ${noTimeRegistered.map(describe).join(", ")}. ` +
+          `Fill/compact them first or use force=true.`,
       }),
     };
   } catch (e) {
     return { error: `Request failed: ${e}` };
   }
-}
-
-interface WorkdayData {
-  diarySummaryWorkday?: Record<string, unknown>;
-  signSlots?: Array<{
-    in?: { signId?: number; time?: string };
-    out?: { signId?: number; time?: string };
-  }>;
 }
 
 async function fetchWorkday(
@@ -552,30 +558,6 @@ async function fetchWorkday(
     return { error: `HTTP error: ${response.status}`, details: text };
   }
   return (await response.json()) as WorkdayData;
-}
-
-function toMinutes(t: string): number {
-  const [h, m] = t.split(":");
-  return parseInt(h) * 60 + parseInt(m);
-}
-
-/** Worked hours computed from persisted signs (signId > 0). The presence
- * summary lags behind (async projection), so this is the source of truth. */
-function signedHours(wd: WorkdayData): {
-  hours: number;
-  slots: Array<{ in: string; out: string }>;
-} {
-  const slots: Array<{ in: string; out: string }> = [];
-  let minutes = 0;
-  for (const s of wd.signSlots || []) {
-    const inT = s.in?.time;
-    const outT = s.out?.time;
-    if ((s.in?.signId || 0) > 0 && inT && outT) {
-      slots.push({ in: inT, out: outT });
-      minutes += toMinutes(outT) - toMinutes(inT);
-    }
-  }
-  return { hours: minutes / 60, slots };
 }
 
 async function unconfirmDays(
@@ -831,6 +813,12 @@ async function completeDay(
     }
   }
 
+  if (slots.length > MAX_SLOTS) {
+    return {
+      error: `At most ${MAX_SLOTS} slots per day (got ${slots.length}).`,
+    };
+  }
+
   const url = `${config.baseUrl}/api/diaries/${diaryId}/workday/slots/self`;
 
   const formattedSlots: Array<Record<string, unknown>> = [];
@@ -926,21 +914,38 @@ async function completeDay(
       return { error: `HTTP error: ${response.status}`, details: text };
     }
 
+    // Woffu answers 204 even when it discards the write (closed periods, or a
+    // day with no existing signs: this endpoint can only EDIT persisted
+    // signs). Re-read the persisted signs and judge from them.
+    let check = checkDayReady(await fetchWorkday(config, date));
+    for (let attempt = 0; attempt < 3 && !check.ok; attempt++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      check = checkDayReady(await fetchWorkday(config, date));
+    }
+
+    if (!check.ok) {
+      return {
+        error:
+          `Write to ${date} accepted but the persisted day is not complete: ` +
+          `${check.reasons.join("; ")}. ` +
+          (check.slot_count === 0
+            ? "This endpoint can only edit existing signs; a day with no " +
+              "signs must get its clock in/out created first (web or clock_in/out)."
+            : "Fix the day in the web, then retry."),
+        verified: check,
+      };
+    }
+
     const result: Record<string, unknown> = {
       status: "success",
       action: "complete_day",
       date,
       slots_count: formattedSlots.length,
-      note:
-        "Woffu persists and recalculates asynchronously. Verify with " +
-        "woffu_day_detail; closed periods (e.g. past months) may silently " +
-        "discard the write.",
+      verified: check,
     };
 
     if (confirm) {
-      // Force: worked time is recalculated asynchronously, so the freshly
-      // written slots may not be reflected yet.
-      result.confirmation = await confirmDays([date], true);
+      result.confirmation = await confirmDays([date]);
     }
 
     return result;
@@ -1038,7 +1043,11 @@ const TOOLS: Tool[] = [
   {
     name: "woffu_complete_day",
     description:
-      "Fill time entries for a past day. Cannot be used for today until after 17:00.",
+      "Edit time entries for a past day (max 2 slots). Woffu can only EDIT " +
+      "existing signs: a day with no clock in/out gets a 204 but nothing is " +
+      "persisted, so the result is verified against the persisted signs and " +
+      "reported as an error if the day is not complete. Cannot be used for " +
+      "today until after 17:00.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1060,7 +1069,8 @@ const TOOLS: Tool[] = [
         confirm: {
           type: "boolean",
           description:
-            "Confirm (accept) the day after filling it. Default: false.",
+            "Confirm (accept) the day after filling it, only if the persisted " +
+            "signs cover the scheduled hours in at most 2 slots. Default: false.",
           default: false,
         },
         force: {
@@ -1078,7 +1088,9 @@ const TOOLS: Tool[] = [
     name: "woffu_confirm_day",
     description:
       "Confirm (confirmar) one or more workday diaries in Woffu. Marks the day's " +
-      "time records as reviewed/accepted by the employee. Days already confirmed are skipped.",
+      "time records as reviewed/accepted by the employee. Days already confirmed are " +
+      "skipped. Refuses days whose persisted signs don't cover the scheduled hours " +
+      "or exceed 2 slots, unless force=true.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1091,7 +1103,8 @@ const TOOLS: Tool[] = [
         force: {
           type: "boolean",
           description:
-            "Confirm even if the day has no time registered. Default: false.",
+            "Confirm even if the day is incomplete (missing hours or more than " +
+            "2 slots). Default: false.",
           default: false,
         },
       },

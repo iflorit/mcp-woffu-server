@@ -226,12 +226,14 @@ Get the user's assigned work schedule.
 
 ### `woffu_complete_day`
 
-Complete or edit time entries for a past day.
+Edit time entries for a past day (at most 2 slots).
+
+Woffu's slot endpoint can only **edit** signs that already exist: on a day with no clock in/out it answers 204 but persists nothing. The tool therefore re-reads the persisted signs after writing and returns an error unless they cover the day's scheduled hours in at most 2 slots (`verified` carries the detail). Days with no signs must get their clock in/out created first (web or `woffu_clock_in`/`woffu_clock_out`).
 
 **Parameters**:
 - `date`: Date in YYYY-MM-DD format
-- `slots`: List of time slots with `in_time` and `out_time` (HH:MM format)
-- `confirm` (optional, default `false`): confirm (accept) the day right after filling it. Confirmation requires registered time unless forced.
+- `slots`: List of up to 2 time slots with `in_time` and `out_time` (HH:MM format)
+- `confirm` (optional, default `false`): confirm (accept) the day right after filling it. Only happens when the verification above passes.
 - `force` (optional, default `false`): fill even if the day is a weekend, holiday, calendar event, or has absences/vacations (refused otherwise)
 
 **Example**:
@@ -249,11 +251,11 @@ Complete or edit time entries for a past day.
 
 Confirm (accept) one or more workday diaries, marking the day's records as reviewed by the employee. Already-confirmed days are skipped.
 
-Refuses days without registered time unless `force: true`.
+Refuses days whose persisted signs don't cover the scheduled hours (e.g. 8h) or aren't compacted into at most 2 slots, unless `force: true`. The response lists the reasons per date under `not_ready`.
 
 **Parameters**:
 - `dates`: List of dates in YYYY-MM-DD format
-- `force` (optional, default `false`): confirm even with no time registered
+- `force` (optional, default `false`): confirm even if the day is incomplete
 
 **Example**:
 ```json
