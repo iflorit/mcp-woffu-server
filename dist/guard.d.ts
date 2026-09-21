@@ -18,7 +18,9 @@ export declare const MAX_SLOTS = 2;
 export declare function toMinutes(t: string): number;
 /** Worked hours computed from persisted signs: both in and out must have
  * signId > 0. A pair with a placeholder out (signId 0) is an open clock-in
- * whose out is the schedule template, not a persisted sign. */
+ * whose out is the schedule template, not a persisted sign. Zero-length
+ * pairs are surplus signs collapsed onto a block end (the API cannot delete
+ * signs); they carry no time and are not counted as slots. */
 export declare function signedHours(wd: WorkdayData): {
     hours: number;
     slots: Array<{

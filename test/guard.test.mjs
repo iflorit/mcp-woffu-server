@@ -20,17 +20,37 @@ test("empty day: schedule placeholders (signId 0) are not signs", () => {
   assert.match(c.reasons.join(";"), /no persisted signs/);
 });
 
-test("8h in 4 slots (two zero-length) is not compacted", () => {
-  // Captured 2026-09-07.
+test("8h in one block plus zero-length leftovers is ready", () => {
+  // Captured 2026-09-07: surplus signs cannot be deleted through the API,
+  // the only compaction possible is collapsing them onto the block end.
+  // Those 0-minute pairs carry no time and must not count as slots.
   const c = checkDayReady(
     wd(28800,
-      slot("08:00:00", "14:00:00", 1), slot("15:00:00", "17:00:00", 2),
-      slot("17:00:00", "17:00:00", 3), slot("17:00:00", "17:00:00", 4))
+      slot("08:00:00", "16:00:00", 1),
+      slot("16:00:00", "16:00:00", 3), slot("16:00:00", "16:00:00", 4))
+  );
+  assert.equal(c.ok, true);
+  assert.equal(c.signed_hours, 8);
+  assert.equal(c.slot_count, 1);
+  assert.deepEqual(c.slots, [{ in: "08:00:00", out: "16:00:00" }]);
+});
+
+test("8h in 3 real slots is not compacted", () => {
+  const c = checkDayReady(
+    wd(28800,
+      slot("08:00:00", "11:00:00", 1), slot("11:00:00", "14:00:00", 2),
+      slot("15:00:00", "17:00:00", 3))
   );
   assert.equal(c.ok, false);
-  assert.equal(c.signed_hours, 8);
-  assert.equal(c.slot_count, 4);
-  assert.match(c.reasons.join(";"), /4 slots.*at most 2/);
+  assert.equal(c.slot_count, 3);
+  assert.match(c.reasons.join(";"), /3 slots.*at most 2/);
+});
+
+test("one block of the scheduled hours is the target shape", () => {
+  const c = checkDayReady(wd(28800, slot("08:00:00", "16:00:00", 1)));
+  assert.equal(c.ok, true);
+  assert.equal(c.slot_count, 1);
+  assert.equal(checkDayReady(wd(21600, slot("09:00:00", "15:00:00", 1))).ok, true);
 });
 
 test("8h in 2 slots is ready", () => {

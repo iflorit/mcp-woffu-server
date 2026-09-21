@@ -230,6 +230,8 @@ Edit time entries for a past day (at most 2 slots).
 
 Woffu's slot endpoint can only **edit** signs that already exist: on a day with no clock in/out it answers 204 but persists nothing. The tool refuses to write at all unless the requested slots cover the day's scheduled hours (e.g. 8h) in at most 2 slots and the day already has persisted signs to edit. It then re-reads the persisted signs after writing and returns an error unless they cover the day's scheduled hours in at most 2 slots (`verified` carries the detail). Days with no signs must get their clock in/out created first (web or `woffu_clock_in`/`woffu_clock_out`).
 
+When `slots` is omitted the tool targets a single block: the schedule's start time plus its working time (e.g. 08:00-16:00 for an 8h day, 09:00-15:00 for a 6h Friday). Surplus signs cannot be deleted through the API, so they are collapsed onto the block end as zero-length pairs; those pairs count neither as hours nor as slots. Woffu rejects (`400 _SignAddError`) sign times in the future, so today can only be filled once the block has ended.
+
 **Parameters**:
 - `date`: Date in YYYY-MM-DD format
 - `slots`: List of up to 2 time slots with `in_time` and `out_time` (HH:MM format)

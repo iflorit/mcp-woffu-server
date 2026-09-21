@@ -19,7 +19,9 @@ export function toMinutes(t: string): number {
 
 /** Worked hours computed from persisted signs: both in and out must have
  * signId > 0. A pair with a placeholder out (signId 0) is an open clock-in
- * whose out is the schedule template, not a persisted sign. */
+ * whose out is the schedule template, not a persisted sign. Zero-length
+ * pairs are surplus signs collapsed onto a block end (the API cannot delete
+ * signs); they carry no time and are not counted as slots. */
 export function signedHours(wd: WorkdayData): {
   hours: number;
   slots: Array<{ in: string; out: string }>;
@@ -30,8 +32,10 @@ export function signedHours(wd: WorkdayData): {
     const inT = s.in?.time;
     const outT = s.out?.time;
     if ((s.in?.signId || 0) > 0 && (s.out?.signId || 0) > 0 && inT && outT) {
+      const len = toMinutes(outT) - toMinutes(inT);
+      if (len <= 0) continue;
       slots.push({ in: inT, out: outT });
-      minutes += toMinutes(outT) - toMinutes(inT);
+      minutes += len;
     }
   }
   return { hours: minutes / 60, slots };

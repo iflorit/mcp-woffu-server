@@ -8,7 +8,7 @@
  *   WOFFU_BASE_URL: Base URL (default: https://app.woffu.com)
  */
 
-import { checkDayReady, checkWritePlan, signedHours, type WorkdayData } from "./guard.js";
+import { checkDayReady, checkWritePlan, signedHours, toMinutes, type WorkdayData } from "./guard.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -789,28 +789,22 @@ async function completeDay(
   const diaryId = diary.diaryId;
 
   if (!slots || slots.length === 0) {
-    // Default to the assigned schedule for the day.
+    // Default: one single block starting at the scheduled start time and
+    // lasting the scheduled working time (e.g. 08:00-16:00 for 8h,
+    // 09:00-15:00 for a 6h Friday).
     const wd = await fetchWorkday(config, date);
     if (wd.error) return { error: wd.error, details: wd.details };
-    const sched = (wd.diarySummaryWorkday || {}) as Record<string, string>;
-    const trim = (t?: string) => (t ? t.substring(0, 5) : "");
-    if (sched.startTime && sched.endTime1 && sched.startTime2) {
-      slots = [
-        { in_time: trim(sched.startTime), out_time: trim(sched.endTime1) },
-        {
-          in_time: trim(sched.startTime2),
-          out_time: trim(sched.endTime2 || sched.endTime),
-        },
-      ];
-    } else if (sched.startTime && sched.endTime) {
-      slots = [
-        { in_time: trim(sched.startTime), out_time: trim(sched.endTime) },
-      ];
-    } else {
+    const sched = (wd.diarySummaryWorkday || {}) as Record<string, unknown>;
+    const start = typeof sched.startTime === "string" ? sched.startTime.substring(0, 5) : "";
+    const workingSec = Number(sched.workingTime ?? 0);
+    if (!start || workingSec <= 0) {
       return {
         error: `No slots given and no schedule found for ${date}`,
       };
     }
+    const endMin = toMinutes(start) + Math.round(workingSec / 60);
+    const end = `${String(Math.floor(endMin / 60)).padStart(2, "0")}:${String(endMin % 60).padStart(2, "0")}`;
+    slots = [{ in_time: start, out_time: end }];
   }
 
   // Never write unless the result is guaranteed to be a complete day.
@@ -1061,7 +1055,8 @@ const TOOLS: Tool[] = [
           type: "array",
           description:
             "Time slots: [{in_time: 'HH:MM', out_time: 'HH:MM'}, ...]. " +
-            "Omit to use the day's assigned schedule.",
+            "Omit for a single block from the schedule's start time lasting " +
+            "its working time (e.g. 08:00-16:00 for 8h, 09:00-15:00 for 6h).",
           items: {
             type: "object",
             properties: {
