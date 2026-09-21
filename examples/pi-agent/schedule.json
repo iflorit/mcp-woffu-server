@@ -1,0 +1,13 @@
+{
+  "_comment": "Target block per weekday: start time and hours to sign. Days omitted here (or set to null) use the schedule Woffu assigns for that day. Weekends, holidays and absences are always skipped regardless of this file.",
+  "timezone": "Europe/Madrid",
+  "days": {
+    "mon": { "start": "08:00", "hours": 8 },
+    "tue": { "start": "08:00", "hours": 8 },
+    "wed": { "start": "08:00", "hours": 8 },
+    "thu": { "start": "08:00", "hours": 8 },
+    "fri": { "start": "09:00", "hours": 6 },
+    "sat": null,
+    "sun": null
+  }
+}

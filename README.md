@@ -307,6 +307,19 @@ npm run build
 npm run dev
 ```
 
+### Tests
+
+```bash
+npm test        # TypeScript guard tests + Python example tests
+```
+
+### Unattended agent example
+
+[`examples/pi-agent/`](examples/pi-agent/) is a cron-driven Python script
+(no LLM, no dependencies) that keeps every workday signed as one block of the
+scheduled hours and confirms it only when the hours match. It encodes the
+API constraints documented above and ships with its own unit tests.
+
 ## Security Notes
 
 - **Never commit your JWT token** to version control

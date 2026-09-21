@@ -32,3 +32,8 @@ coverage/
 scripts/
 set-token.sh
 .env
+
+# Example agent runtime files
+examples/pi-agent/.env
+examples/pi-agent/*.log
+__pycache__/
