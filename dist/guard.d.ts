@@ -15,7 +15,14 @@ export interface WorkdayData {
     }>;
 }
 export declare const MAX_SLOTS = 2;
+/** Human-readable duration, seconds included: a "8h vs 8h" message hid the
+ * one-second shortfall that let 08:00:24-16:00:23 confirm. */
+export declare function hms(seconds: number): string;
 export declare function toMinutes(t: string): number;
+/** Seconds since midnight. Woffu counts seconds: a live clock-in at 08:00:24
+ * with a clock-out at 16:00:23 is 7h59m59s, not 8h, and rounding to minutes
+ * reported such a day as complete. */
+export declare function toSeconds(t: string): number;
 /** Worked hours computed from persisted signs: both in and out must have
  * signId > 0. A pair with a placeholder out (signId 0) is an open clock-in
  * whose out is the schedule template, not a persisted sign. Zero-length

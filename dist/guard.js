@@ -2,9 +2,24 @@
  * Works purely on the workday/slots payload (persisted signs), which is the
  * source of truth: the presence summary lags behind an async projection. */
 export const MAX_SLOTS = 2;
+/** Human-readable duration, seconds included: a "8h vs 8h" message hid the
+ * one-second shortfall that let 08:00:24-16:00:23 confirm. */
+export function hms(seconds) {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    return `${h}h${String(m).padStart(2, "0")}m${String(s).padStart(2, "0")}s`;
+}
 export function toMinutes(t) {
     const [h, m] = t.split(":");
     return parseInt(h) * 60 + parseInt(m);
+}
+/** Seconds since midnight. Woffu counts seconds: a live clock-in at 08:00:24
+ * with a clock-out at 16:00:23 is 7h59m59s, not 8h, and rounding to minutes
+ * reported such a day as complete. */
+export function toSeconds(t) {
+    const [h, m, s] = t.split(":");
+    return parseInt(h) * 3600 + parseInt(m) * 60 + (s ? parseInt(s) : 0);
 }
 /** Worked hours computed from persisted signs: both in and out must have
  * signId > 0. A pair with a placeholder out (signId 0) is an open clock-in
@@ -13,19 +28,19 @@ export function toMinutes(t) {
  * signs); they carry no time and are not counted as slots. */
 export function signedHours(wd) {
     const slots = [];
-    let minutes = 0;
+    let seconds = 0;
     for (const s of wd.signSlots || []) {
         const inT = s.in?.time;
         const outT = s.out?.time;
         if ((s.in?.signId || 0) > 0 && (s.out?.signId || 0) > 0 && inT && outT) {
-            const len = toMinutes(outT) - toMinutes(inT);
+            const len = toSeconds(outT) - toSeconds(inT);
             if (len <= 0)
                 continue;
             slots.push({ in: inT, out: outT });
-            minutes += len;
+            seconds += len;
         }
     }
-    return { hours: minutes / 60, slots };
+    return { hours: seconds / 3600, slots };
 }
 /** A day is ready to confirm when its persisted signs cover the scheduled
  * hours and are compacted into at most MAX_SLOTS slots. */
@@ -34,11 +49,13 @@ export function checkDayReady(wd) {
     const workingTime = Number(wd.diarySummaryWorkday?.workingTime ?? 0);
     const required = workingTime > 0 ? workingTime / 3600 : 0;
     const reasons = [];
+    // Compare whole seconds: a day short by one second must not pass.
+    const signedSec = Math.round(signed.hours * 3600);
     if (required <= 0) {
         reasons.push("no scheduled hours for this day");
     }
-    else if (signed.hours + 1e-9 < required) {
-        reasons.push(`only ${signed.hours}h signed, schedule requires ${required}h`);
+    else if (signedSec < workingTime) {
+        reasons.push(`only ${hms(signedSec)} signed, schedule requires ${hms(workingTime)}`);
     }
     if (signed.slots.length === 0) {
         reasons.push("no persisted signs");
@@ -61,17 +78,17 @@ export function checkDayReady(wd) {
 export function checkWritePlan(wd, requested) {
     const workingTime = Number(wd.diarySummaryWorkday?.workingTime ?? 0);
     const required = workingTime > 0 ? workingTime / 3600 : 0;
-    let minutes = 0;
+    let sec = 0;
     for (const s of requested)
-        minutes += toMinutes(s.out_time) - toMinutes(s.in_time);
-    const hours = minutes / 60;
+        sec += toSeconds(s.out_time) - toSeconds(s.in_time);
+    const hours = sec / 3600;
     const reasons = [];
     if (requested.length > MAX_SLOTS)
         reasons.push(`at most ${MAX_SLOTS} slots per day (got ${requested.length})`);
     if (required <= 0)
         reasons.push("no scheduled hours for this day");
-    else if (hours + 1e-9 < required)
-        reasons.push(`requested slots total ${hours}h, schedule requires ${required}h`);
+    else if (sec < workingTime)
+        reasons.push(`requested slots total ${hms(sec)}, schedule requires ${hms(workingTime)}`);
     if (signedHours(wd).slots.length === 0)
         reasons.push("day has no persisted signs; the slots endpoint can only edit existing " +
             "signs, so the write would be silently discarded");

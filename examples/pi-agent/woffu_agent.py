@@ -98,7 +98,28 @@ def load_env() -> dict:
     return env
 
 
+REQ_INTENTOS = 3
+
+
 def _req(env: dict, method: str, path: str, body=None):
+    """Reintenta los fallos de RED (DNS caido, timeout, conexion cortada).
+    Un `gaierror` sin capturar mataba el pase de las 22:00 entero: el dia se
+    quedaba sin rellenar y sin aviso."""
+    ultimo = None
+    for intento in range(REQ_INTENTOS):
+        try:
+            return _req_once(env, method, path, body)
+        except (urllib.error.URLError, OSError, TimeoutError) as e:
+            ultimo = e
+            if intento < REQ_INTENTOS - 1:
+                espera = 5 * (intento + 1)
+                log.warning("red: %s %s fallo (%s), reintento en %ds", method, path, e, espera)
+                time.sleep(espera)
+    log.error("red: %s %s agoto %d intentos: %s", method, path, REQ_INTENTOS, ultimo)
+    return 0, "fallo de red: %s" % ultimo
+
+
+def _req_once(env: dict, method: str, path: str, body=None):
     url = env["WOFFU_BASE_URL"] + path
     headers = {
         "Authorization": "Bearer " + env["WOFFU_TOKEN"],
@@ -157,8 +178,17 @@ def notify(env: dict, title: str, message: str):
 
 
 def _hhmm(t: str) -> int:
+    """Minutos desde medianoche (para horarios, que siempre son :00)."""
     h, m = t.split(":")[:2]
     return int(h) * 60 + int(m)
+
+
+def _segundos(t: str) -> int:
+    """Segundos desde medianoche. Woffu cuenta los segundos: una firma en
+    vivo a las 08:00:24 con salida a las 16:00:23 son 7h59m59s, no 8h, y
+    redondear a minutos hacia hacia hacia daba el dia por bueno."""
+    partes = (t.split(":") + ["0", "0"])[:3]
+    return int(partes[0]) * 3600 + int(partes[1]) * 60 + int(partes[2])
 
 
 def workday(env: dict, day: str):
@@ -192,6 +222,14 @@ def dia_no_laborable(diary) -> str:
     if diary.get("absenceEvents") or diary.get("pendingAbsenceEvents"):
         return "ausencia/vacaciones"
     return ""
+
+
+def _hms(segundos: int) -> str:
+    return "%dh%02dm%02ds" % (segundos // 3600, segundos % 3600 // 60, segundos % 60)
+
+
+def _seg_hhmmss(seg: int) -> str:
+    return "%02d:%02d:%02d" % (seg // 3600, seg % 3600 // 60, seg % 60)
 
 
 def _min_hhmm(m: int) -> str:
@@ -261,24 +299,54 @@ def slots_completos(wd) -> list:
     return out
 
 
+def segundos_fichados(wd) -> int:
+    """Segundos realmente fichados, con precision de segundo."""
+    return sum(_segundos(sl["out"]["time"]) - _segundos(sl["in"]["time"])
+               for sl in slots_completos(wd))
+
+
 def horas_fichadas(wd) -> tuple:
-    total, franjas = 0, []
-    for sl in slots_completos(wd):
-        i, o = sl["in"], sl["out"]
-        total += _hhmm(o["time"]) - _hhmm(i["time"])
-        franjas.append("%s-%s" % (i["time"][:5], o["time"][:5]))
-    return total / 60.0, franjas
+    franjas = ["%s-%s" % (sl["in"]["time"][:5], sl["out"]["time"][:5])
+               for sl in slots_completos(wd)]
+    return segundos_fichados(wd) / 3600.0, franjas
+
+
+def layout_persistido(wd) -> list:
+    """Pares (entrada, salida) tal cual estan persistidos, con segundos."""
+    return [(sl["in"]["time"], sl["out"]["time"]) for sl in slots_completos(wd)]
+
+
+def layout_objetivo(tramos: list, n_slots: int) -> list:
+    """Como debe quedar el dia con las `n_slots` firmas que ya existen.
+
+    Con un solo slot, el bloque tal cual. Con mas slots que tramos hay que
+    REPARTIR el bloque en tramos contiguos (08:00-12:00, 12:00-16:00) en vez
+    de colapsar los sobrantes a duracion cero: el PUT devuelve 500
+    `_DefaultDetailError` si se le manda un tramo de longitud cero en un dia
+    cuya primera firma es un fichaje en vivo (`signType` 0). Contiguos suman
+    lo mismo y Woffu los acepta."""
+    sobrantes = max(0, n_slots - len(tramos))
+    if not sobrantes:
+        return [(i, f) for i, f in tramos]
+    ini, fin = tramos[0][0], tramos[-1][1]
+    total = _segundos(fin) - _segundos(ini)
+    trozos = len(tramos) + sobrantes
+    cortes = [_segundos(ini) + total * k // trozos for k in range(trozos + 1)]
+    return [(_seg_hhmmss(cortes[k]), _seg_hhmmss(cortes[k + 1])) for k in range(trozos)]
 
 
 def _retocar(firma: dict, nueva_hora: str) -> dict:
     """La firma existente, entera, con la hora cambiada.
 
     Conservar `signId` y el resto de campos es lo que hace que el PUT
-    persista: es una edicion, no un alta."""
+    persista: es una edicion, no un alta. Y hay que conservar tambien el
+    `signType` ORIGINAL: forzarlo a 3 (edicion web) sobre una firma creada
+    en vivo (`signType` 0) hace que el PUT devuelva 500
+    `_DefaultDetailError`; el dia se quedaba sin corregir para siempre."""
     c = dict(firma)
     c["time"] = nueva_hora
     c["signStatus"] = 1
-    c["signType"] = 3
+    c.setdefault("signType", 3)
     return c
 
 
@@ -304,12 +372,14 @@ def rellenar_dia(env: dict, day: str) -> tuple:
     if day == ahora.date().isoformat() and ahora.hour * 60 + ahora.minute < _hhmm(tramos[-1][1]):
         return False, ("%s: todavia no son las %s, se rellenara en el pase de las 22:00"
                        % (day, tramos[-1][1][:5]))
-    if abs(actuales - esperadas) < 0.01:
-        objetivo = ["%s-%s" % (i[:5], f[:5]) for i, f in tramos]
-        if franjas[:len(objetivo)] == objetivo:
-            return True, ""
 
     existentes = slots_completos(wd)
+    # "Ya esta bien" se decide comparando el LAYOUT exacto (con segundos), no
+    # las horas: 08:00:24-16:00:23 suma 8h al redondear a minutos y el dia se
+    # quedaba con 7h59 sin que nadie lo tocase.
+    if layout_persistido(wd) == layout_objetivo(tramos, len(existentes)):
+        return True, ""
+
     if len(existentes) < len(tramos):
         return False, ("%s: %g/%gh -- solo %d franja(s) fichada(s) y el horario "
                        "necesita %d. La API solo puede EDITAR fichajes que ya "
@@ -317,18 +387,15 @@ def rellenar_dia(env: dict, day: str) -> tuple:
                        "en la web." % (day, actuales, esperadas, len(existentes), len(tramos)))
 
     ms = int(time.time() * 1000)
+    objetivo = layout_objetivo(tramos, len(existentes))
     slots = []
     for idx, sl in enumerate(existentes):
-        if idx < len(tramos):
-            ini, fin = tramos[idx]
-        else:
-            # Sobrante: no se puede borrar, se colapsa a duracion cero.
-            ini = fin = tramos[-1][1]
+        ini, fin = objetivo[idx]
         slots.append({"id": "%d-%d" % (ms, idx),
                       "in": _retocar(sl["in"], ini),
                       "out": _retocar(sl["out"], fin),
                       "motive": None,
-                      "totalMin": _hhmm(fin) - _hhmm(ini)})
+                      "totalMin": (_segundos(fin) - _segundos(ini)) // 60})
 
     st, detalle = _req(env, "PUT",
                        "/api/svc/core/users/%s/diarysummaries/workday/slots/self" % env["WOFFU_USER_ID"],
@@ -338,10 +405,13 @@ def rellenar_dia(env: dict, day: str) -> tuple:
         return False, "%s: el PUT devolvio %s %s" % (day, st, detalle)
 
     time.sleep(6)
-    nuevas, franjas2 = horas_fichadas(workday(env, day))
-    if abs(nuevas - esperadas) >= 0.01:
-        return False, ("%s: tras rellenar quedan %gh en vez de %gh (%s)"
-                       % (day, nuevas, esperadas, " ".join(franjas2)))
+    wd2 = workday(env, day)
+    nuevas, franjas2 = horas_fichadas(wd2)
+    objetivo_s = sum(_segundos(f) - _segundos(i) for i, f in tramos)
+    if segundos_fichados(wd2) != objetivo_s:
+        return False, ("%s: tras rellenar quedan %s en vez de %s (%s)"
+                       % (day, _hms(segundos_fichados(wd2)), _hms(objetivo_s),
+                          " ".join(franjas2)))
     log.info("fill %s: %g -> %gh  %s", day, actuales, nuevas, " ".join(franjas2))
     return True, ""
 
@@ -356,11 +426,17 @@ def confirmar_dia(env: dict, day: str) -> str:
     # Regla dura, independiente del fill: solo se confirma si las firmas
     # persistidas cubren exactamente las horas asignadas.
     wd = workday(env, day)
-    esperadas = horas_objetivo(wd, day, env.get("_schedule"))
-    fichadas, franjas = horas_fichadas(wd)
-    if esperadas <= 0 or abs(fichadas - esperadas) >= 0.01:
-        return ("%s: NO se confirma, %gh fichadas y el horario pide %gh (%s)"
-                % (day, fichadas, esperadas, " ".join(franjas) or "sin fichajes"))
+    tramos = tramos_horario(wd, day, (env or {}).get("_schedule"))
+    # Igualdad EXACTA en segundos, sin tolerancia: el fill siempre escribe
+    # horas en punto, asi que lo exacto es alcanzable, y una tolerancia de
+    # medio minuto dejaba pasar los 7h59m59s de un fichaje en vivo.
+    objetivo_s = sum(_segundos(f) - _segundos(i) for i, f in tramos)
+    fichados_s = segundos_fichados(wd)
+    if objetivo_s <= 0 or fichados_s != objetivo_s:
+        _, franjas = horas_fichadas(wd)
+        return ("%s: NO se confirma, %s fichados y el horario pide %s (%s)"
+                % (day, _hms(fichados_s), _hms(objetivo_s),
+                   " ".join(franjas) or "sin fichajes"))
     uid = int(env["WOFFU_USER_ID"])
     # accepted=False significa "invalidada" (editada tras confirmarse) y el
     # endpoint de confirmar la ignora en silencio: primero hay que devolverla
@@ -418,18 +494,24 @@ def cmd_fill(env: dict, explicito) -> int:
 
     problemas = []
     for day in objetivo:
+        # Un dia que falla no puede tumbar el pase entero (ni el aviso final).
         try:
             ok, msg = rellenar_dia(env, day)
+            if not ok:
+                problemas.append(msg)
+                continue
+            err = confirmar_dia(env, day)
+            if err:
+                problemas.append(err)
         except Exception as e:
-            ok, msg = False, "%s: %s" % (day, e)
-        if not ok:
-            problemas.append(msg)
-            continue
-        err = confirmar_dia(env, day)
-        if err:
-            problemas.append(err)
+            log.exception("fill %s fallo", day)
+            problemas.append("%s: %s" % (day, e))
     # Resumen de la semana en curso, para el aviso de Slack.
-    lineas, total = resumen_semana(env, hoy)
+    try:
+        lineas, total = resumen_semana(env, hoy)
+    except Exception as e:
+        log.exception("resumen semanal fallo")
+        lineas, total = ["(resumen no disponible: %s)" % e], 0.0
     cuerpo = "\n".join(lineas)
     if problemas:
         cuerpo += "\n\nATENCION:\n" + "\n".join(problemas)

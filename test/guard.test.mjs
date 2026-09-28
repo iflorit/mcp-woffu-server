@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { checkDayReady, checkWritePlan, signedHours } from "../dist/guard.js";
+import { checkDayReady, checkWritePlan, signedHours, hms, toSeconds } from "../dist/guard.js";
 
 const slot = (i, o, id) => ({
   in: { signId: id, time: i },
@@ -65,7 +65,30 @@ test("8h in 2 slots is ready", () => {
 test("fewer hours than the schedule is rejected", () => {
   const c = checkDayReady(wd(28800, slot("08:00:00", "14:00:00", 1)));
   assert.equal(c.ok, false);
-  assert.match(c.reasons.join(";"), /only 6h signed, schedule requires 8h/);
+  assert.match(c.reasons.join(";"), /only 6h00m00s signed, schedule requires 8h00m00s/);
+});
+
+test("a day one second short of the schedule is rejected", () => {
+  // Captured 2026-09-24: live signs carry seconds, so 08:00:24-16:00:23 is
+  // 7h59m59s. Rounding to whole minutes reported this day as complete and it
+  // got confirmed at 7h59.
+  assert.equal(toSeconds("16:00:23") - toSeconds("08:00:24"), 28799);
+  const c = checkDayReady(wd(28800, slot("08:00:24", "16:00:23", 1)));
+  assert.equal(c.ok, false);
+  assert.match(c.reasons.join(";"), /only 7h59m59s signed, schedule requires 8h00m00s/);
+});
+
+test("write plan refuses slots one second short", () => {
+  const day = wd(28800, slot("08:00:24", "16:00:23", 1));
+  const c = checkWritePlan(day, [{ in_time: "08:00:24", out_time: "16:00:23" }]);
+  assert.equal(c.ok, false);
+  assert.match(c.reasons.join(";"), /total 7h59m59s, schedule requires 8h00m00s/);
+});
+
+test("hms formats durations with seconds", () => {
+  assert.equal(hms(28800), "8h00m00s");
+  assert.equal(hms(28799), "7h59m59s");
+  assert.equal(hms(21600), "6h00m00s");
 });
 
 test("required hours follow the day's schedule (6h Friday)", () => {
@@ -90,7 +113,7 @@ const req = (...p) => p.map(([i, o]) => ({ in_time: i, out_time: o }));
 test("write plan: refuses fewer hours than the schedule before writing", () => {
   const c = checkWritePlan(day07, req(["08:00", "14:00"]));
   assert.equal(c.ok, false);
-  assert.match(c.reasons.join(";"), /total 6h, schedule requires 8h/);
+  assert.match(c.reasons.join(";"), /total 6h00m00s, schedule requires 8h00m00s/);
 });
 
 test("write plan: refuses more than 2 slots", () => {

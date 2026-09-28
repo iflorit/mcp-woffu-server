@@ -103,6 +103,91 @@ class Firmas(unittest.TestCase):
         self.assertEqual(w.firmas_persistidas(d), 6)
 
 
+class SegundosDeFichajeEnVivo(unittest.TestCase):
+    """Regression: live signs carry seconds. 08:00:24-16:00:23 is 7h59m59s,
+    not 8h; rounding to minutes let the day pass as complete (2026-09-24)."""
+
+    DIA = wd("08:00:00", 28800, slot("08:00:24", "16:00:23", 1))
+
+    def test_segundos_fichados_no_redondea(self):
+        self.assertEqual(w.segundos_fichados(self.DIA), 28799)
+        self.assertEqual(w._hms(28799), "7h59m59s")
+        self.assertLess(w.horas_fichadas(self.DIA)[0], 8.0)
+
+    def test_layout_con_segundos_no_coincide_con_el_objetivo(self):
+        # El atajo "ya esta bien" comparaba horas y strings HH:MM, y este dia
+        # pasaba sin tocarse. Comparando el layout exacto, no pasa.
+        self.assertEqual(w.layout_persistido(self.DIA), [("08:00:24", "16:00:23")])
+        self.assertNotEqual(w.layout_persistido(self.DIA),
+                            w.layout_objetivo([("08:00:00", "16:00:00")], 1))
+
+    def test_layout_objetivo_reparte_sobrantes_en_tramos_contiguos(self):
+        # Regression 2026-09-22: colapsar un slot sobrante a duracion cero
+        # hace que el PUT devuelva 500 si la primera firma es en vivo. Se
+        # reparte el bloque en tramos contiguos que suman lo mismo.
+        dos = w.layout_objetivo([("08:00:00", "16:00:00")], 2)
+        self.assertEqual(dos, [("08:00:00", "12:00:00"), ("12:00:00", "16:00:00")])
+        tres = w.layout_objetivo([("08:00:00", "16:00:00")], 3)
+        self.assertEqual(len(tres), 3)
+        self.assertEqual(tres[0][0], "08:00:00")
+        self.assertEqual(tres[-1][1], "16:00:00")
+        for a, b in zip(tres, tres[1:]):
+            self.assertEqual(a[1], b[0])  # contiguos, sin huecos
+        total = sum(w._segundos(b) - w._segundos(a) for a, b in tres)
+        self.assertEqual(total, 8 * 3600)
+        self.assertNotIn(0, [w._segundos(b) - w._segundos(a) for a, b in tres])
+
+    def test_layout_objetivo_sin_sobrantes_es_el_bloque(self):
+        self.assertEqual(w.layout_objetivo([("09:00:00", "15:00:00")], 1),
+                         [("09:00:00", "15:00:00")])
+
+    def test_dia_ya_correcto_coincide(self):
+        ok = wd("08:00:00", 28800, slot("08:00:00", "16:00:00", 1))
+        self.assertEqual(w.layout_persistido(ok), w.layout_objetivo([("08:00:00", "16:00:00")], 1))
+
+
+class RetocarFirma(unittest.TestCase):
+    """Regression: forcing signType 3 onto a live sign (signType 0) makes the
+    PUT return 500 _DefaultDetailError (2026-09-22). Preserve the original."""
+
+    def test_conserva_signType_de_fichaje_en_vivo(self):
+        c = w._retocar({"signId": 9, "time": "08:00:24", "signType": 0}, "08:00:00")
+        self.assertEqual(c["signType"], 0)
+        self.assertEqual(c["time"], "08:00:00")
+        self.assertEqual(c["signStatus"], 1)
+        self.assertEqual(c["signId"], 9)
+
+    def test_pone_3_si_la_firma_no_lo_trae(self):
+        self.assertEqual(w._retocar({"signId": 9, "time": "x"}, "08:00:00")["signType"], 3)
+
+
+class ReintentosDeRed(unittest.TestCase):
+    """Regression: an uncaught gaierror killed the whole 22:00 pass (2026-09-22)."""
+
+    def test_reintenta_y_devuelve_error_sin_lanzar(self):
+        import urllib.error
+        intentos = []
+        orig_once, orig_sleep = w._req_once, w.time.sleep
+        w._req_once = lambda *a, **k: (intentos.append(1),
+                                       (_ for _ in ()).throw(urllib.error.URLError("dns")))[1]
+        w.time.sleep = lambda s: None
+        try:
+            st, detalle = w._req({"WOFFU_BASE_URL": "x", "WOFFU_TOKEN": "y"}, "GET", "/p")
+        finally:
+            w._req_once, w.time.sleep = orig_once, orig_sleep
+        self.assertEqual(len(intentos), w.REQ_INTENTOS)
+        self.assertEqual(st, 0)
+        self.assertIn("fallo de red", detalle)
+
+    def test_no_reintenta_si_la_llamada_funciona(self):
+        orig = w._req_once
+        w._req_once = lambda *a, **k: (200, {"ok": True})
+        try:
+            self.assertEqual(w._req({}, "GET", "/p"), (200, {"ok": True}))
+        finally:
+            w._req_once = orig
+
+
 class PuertaDeConfirmacion(unittest.TestCase):
     """confirmar_dia only reaches the confirm endpoint when signed == scheduled."""
 
@@ -125,7 +210,21 @@ class PuertaDeConfirmacion(unittest.TestCase):
 
     def test_seis_horas_en_dia_de_ocho_no_confirma(self):
         msg, calls = self._run(wd("08:00:00", 28800, slot("08:00:00", "14:00:00", 1)))
-        self.assertIn("6h fichadas y el horario pide 8h", msg)
+        self.assertIn("6h00m00s fichados y el horario pide 8h00m00s", msg)
+        self.assertEqual(calls, [])
+
+    def test_un_segundo_de_menos_no_confirma(self):
+        # 2026-09-24: firmas en vivo 08:00:24-16:00:23 = 7h59m59s. La
+        # tolerancia anterior (0.01h = 36s) las daba por buenas.
+        msg, calls = self._run(wd("08:00:00", 28800, slot("08:00:24", "16:00:23", 1)))
+        self.assertIn("7h59m59s fichados y el horario pide 8h00m00s", msg)
+        self.assertEqual(calls, [])
+
+    def test_nueve_horas_en_dia_de_ocho_no_confirma(self):
+        # 2026-09-22: dos tramos manuales, 9h. Pasarse tampoco se confirma.
+        d = wd("08:00:00", 28800, slot("08:00:24", "14:00:00", 1), slot("15:00:00", "18:00:00", 2))
+        msg, calls = self._run(d)
+        self.assertIn("fichados y el horario pide 8h00m00s", msg)
         self.assertEqual(calls, [])
 
     def test_ocho_horas_confirma(self):
