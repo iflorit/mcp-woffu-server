@@ -115,35 +115,51 @@ class SegundosDeFichajeEnVivo(unittest.TestCase):
         self.assertLess(w.horas_fichadas(self.DIA)[0], 8.0)
 
     def test_layout_con_segundos_no_coincide_con_el_objetivo(self):
-        # El atajo "ya esta bien" comparaba horas y strings HH:MM, y este dia
-        # pasaba sin tocarse. Comparando el layout exacto, no pasa.
         self.assertEqual(w.layout_persistido(self.DIA), [("08:00:24", "16:00:23")])
-        self.assertNotEqual(w.layout_persistido(self.DIA),
-                            w.layout_objetivo([("08:00:00", "16:00:00")], 1))
+        self.assertNotEqual(w.layout_persistido(self.DIA), w.layout_objetivo(self.DIA))
 
-    def test_layout_objetivo_reparte_sobrantes_en_tramos_contiguos(self):
-        # Regression 2026-09-22: colapsar un slot sobrante a duracion cero
-        # hace que el PUT devuelva 500 si la primera firma es en vivo. Se
-        # reparte el bloque en tramos contiguos que suman lo mismo.
-        dos = w.layout_objetivo([("08:00:00", "16:00:00")], 2)
-        self.assertEqual(dos, [("08:00:00", "12:00:00"), ("12:00:00", "16:00:00")])
-        tres = w.layout_objetivo([("08:00:00", "16:00:00")], 3)
-        self.assertEqual(len(tres), 3)
-        self.assertEqual(tres[0][0], "08:00:00")
-        self.assertEqual(tres[-1][1], "16:00:00")
-        for a, b in zip(tres, tres[1:]):
-            self.assertEqual(a[1], b[0])  # contiguos, sin huecos
-        total = sum(w._segundos(b) - w._segundos(a) for a, b in tres)
-        self.assertEqual(total, 8 * 3600)
-        self.assertNotIn(0, [w._segundos(b) - w._segundos(a) for a, b in tres])
 
-    def test_layout_objetivo_sin_sobrantes_es_el_bloque(self):
-        self.assertEqual(w.layout_objetivo([("09:00:00", "15:00:00")], 1),
-                         [("09:00:00", "15:00:00")])
+class RedondeoA5Minutos(unittest.TestCase):
+    """El fill sube cada extremo fichado al multiplo de 5 minutos superior,
+    en vez de exigir el segundo exacto (modelo elegido 2026-10-01)."""
+
+    def test_ceil5_sube_al_multiplo_superior(self):
+        self.assertEqual(w._ceil5("08:00:24"), "08:05:00")
+        self.assertEqual(w._ceil5("08:02:24"), "08:05:00")
+        self.assertEqual(w._ceil5("08:04:59"), "08:05:00")
+        self.assertEqual(w._ceil5("16:01:10"), "16:05:00")
+        self.assertEqual(w._ceil5("15:58:00"), "16:00:00")
+
+    def test_ceil5_no_mueve_una_hora_ya_en_la_franja(self):
+        for t in ("08:00:00", "08:05:00", "16:00:00", "09:00:00", "15:00:00"):
+            self.assertEqual(w._ceil5(t), t)
+
+    def test_ceil5_no_pasa_de_medianoche(self):
+        self.assertEqual(w._ceil5("23:58:00"), "23:59:59")
+        self.assertEqual(w._ceil5("23:55:00"), "23:55:00")
+
+    def test_objetivo_redondea_ambos_extremos(self):
+        d = wd("08:00:00", 28800, slot("08:02:24", "16:01:10", 1))
+        self.assertEqual(w.layout_objetivo(d), [("08:05:00", "16:05:00")])
+
+    def test_objetivo_respeta_la_jornada_real_no_el_horario(self):
+        # 10:07-18:03 no se reescribe a 08:00-16:00: solo se liman los extremos.
+        d = wd("08:00:00", 28800, slot("10:07:00", "18:03:00", 1))
+        self.assertEqual(w.layout_objetivo(d), [("10:10:00", "18:05:00")])
+
+    def test_objetivo_deja_intacto_un_tramo_que_colapsaria(self):
+        # Entrada y salida en la misma franja: redondear lo dejaria a cero y
+        # el PUT devuelve 500 en un dia con firmas en vivo. Se deja como esta.
+        d = wd("08:00:00", 28800, slot("08:01:00", "08:03:00", 1))
+        self.assertEqual(w.layout_objetivo(d), [("08:01:00", "08:03:00")])
+
+    def test_dia_ya_redondeado_no_necesita_escritura(self):
+        d = wd("08:00:00", 28800, slot("08:05:00", "16:05:00", 1))
+        self.assertEqual(w.layout_persistido(d), w.layout_objetivo(d))
 
     def test_dia_ya_correcto_coincide(self):
         ok = wd("08:00:00", 28800, slot("08:00:00", "16:00:00", 1))
-        self.assertEqual(w.layout_persistido(ok), w.layout_objetivo([("08:00:00", "16:00:00")], 1))
+        self.assertEqual(w.layout_persistido(ok), w.layout_objetivo(ok))
 
 
 class RetocarFirma(unittest.TestCase):
@@ -213,15 +229,32 @@ class PuertaDeConfirmacion(unittest.TestCase):
         self.assertIn("6h00m00s fichados y el horario pide 8h00m00s", msg)
         self.assertEqual(calls, [])
 
-    def test_un_segundo_de_menos_no_confirma(self):
-        # 2026-09-24: firmas en vivo 08:00:24-16:00:23 = 7h59m59s. La
-        # tolerancia anterior (0.01h = 36s) las daba por buenas.
+    def test_un_segundo_de_menos_si_confirma(self):
+        # Modelo 2026-10-01: margen de 5 minutos. 7h59m59s cuadra.
         msg, calls = self._run(wd("08:00:00", 28800, slot("08:00:24", "16:00:23", 1)))
-        self.assertIn("7h59m59s fichados y el horario pide 8h00m00s", msg)
+        self.assertEqual(msg, "")
+        self.assertEqual(len(calls), 1)
+
+    def test_dentro_del_margen_de_5_minutos_confirma(self):
+        # 08:05-16:01 = 7h56m, dentro de los 5 minutos de margen.
+        msg, calls = self._run(wd("08:00:00", 28800, slot("08:05:00", "16:01:00", 1)))
+        self.assertEqual(msg, "")
+        self.assertEqual(len(calls), 1)
+
+    def test_mas_de_5_minutos_de_menos_no_confirma(self):
+        # 08:05-15:59 = 7h54m, se pasa del margen.
+        msg, calls = self._run(wd("08:00:00", 28800, slot("08:05:00", "15:59:00", 1)))
+        self.assertIn("7h54m00s fichados y el horario pide 8h00m00s", msg)
         self.assertEqual(calls, [])
 
+    def test_margen_simetrico_por_exceso(self):
+        # 08:00-16:04 = 8h04m, dentro del margen. 08:00-16:06 se pasa.
+        self.assertEqual(self._run(wd("08:00:00", 28800, slot("08:00:00", "16:04:00", 1)))[0], "")
+        self.assertIn("NO se confirma",
+                      self._run(wd("08:00:00", 28800, slot("08:00:00", "16:06:00", 1)))[0])
+
     def test_nueve_horas_en_dia_de_ocho_no_confirma(self):
-        # 2026-09-22: dos tramos manuales, 9h. Pasarse tampoco se confirma.
+        # 2026-09-22: dos tramos manuales, 9h. Pasarse del margen no se confirma.
         d = wd("08:00:00", 28800, slot("08:00:24", "14:00:00", 1), slot("15:00:00", "18:00:00", 2))
         msg, calls = self._run(d)
         self.assertIn("fichados y el horario pide 8h00m00s", msg)

@@ -15,6 +15,11 @@ export interface WorkdayData {
     }>;
 }
 export declare const MAX_SLOTS = 2;
+/** Signed time may differ from the schedule by up to this many seconds and
+ * still count as a complete day. Live signs land with seconds (08:00:24), so
+ * the agent rounds each end up to the next 5-minute mark rather than hitting
+ * the exact second; demanding exactness blocked otherwise fine days. */
+export declare const TOLERANCE_SECONDS: number;
 /** Human-readable duration, seconds included: a "8h vs 8h" message hid the
  * one-second shortfall that let 08:00:24-16:00:23 confirm. */
 export declare function hms(seconds: number): string;

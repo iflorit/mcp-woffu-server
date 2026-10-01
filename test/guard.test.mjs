@@ -65,24 +65,37 @@ test("8h in 2 slots is ready", () => {
 test("fewer hours than the schedule is rejected", () => {
   const c = checkDayReady(wd(28800, slot("08:00:00", "14:00:00", 1)));
   assert.equal(c.ok, false);
-  assert.match(c.reasons.join(";"), /only 6h00m00s signed, schedule requires 8h00m00s/);
+  assert.match(c.reasons.join(";"), /6h00m00s signed, schedule requires 8h00m00s/);
 });
 
-test("a day one second short of the schedule is rejected", () => {
-  // Captured 2026-09-24: live signs carry seconds, so 08:00:24-16:00:23 is
-  // 7h59m59s. Rounding to whole minutes reported this day as complete and it
-  // got confirmed at 7h59.
+test("a day within the 5-minute tolerance is ready", () => {
+  // Live signs carry seconds (08:00:24-16:00:23 = 7h59m59s) and the agent
+  // rounds each end up to the next 5-minute mark, so the day lands close to
+  // the schedule rather than exactly on it.
   assert.equal(toSeconds("16:00:23") - toSeconds("08:00:24"), 28799);
-  const c = checkDayReady(wd(28800, slot("08:00:24", "16:00:23", 1)));
-  assert.equal(c.ok, false);
-  assert.match(c.reasons.join(";"), /only 7h59m59s signed, schedule requires 8h00m00s/);
+  assert.equal(checkDayReady(wd(28800, slot("08:00:24", "16:00:23", 1))).ok, true);
+  assert.equal(checkDayReady(wd(28800, slot("08:05:00", "16:01:00", 1))).ok, true);
+  assert.equal(checkDayReady(wd(28800, slot("08:00:00", "16:04:00", 1))).ok, true);
 });
 
-test("write plan refuses slots one second short", () => {
+test("a day outside the 5-minute tolerance is rejected", () => {
+  const short = checkDayReady(wd(28800, slot("08:05:00", "15:59:00", 1)));
+  assert.equal(short.ok, false);
+  assert.match(short.reasons.join(";"), /7h54m00s signed, schedule requires 8h00m00s/);
+  assert.match(short.reasons.join(";"), /tolerance 5min/);
+  // Symmetric: overshooting by more than 5 minutes is rejected too.
+  assert.equal(checkDayReady(wd(28800, slot("08:00:00", "16:06:00", 1))).ok, false);
+});
+
+test("write plan accepts slots within tolerance, refuses beyond it", () => {
   const day = wd(28800, slot("08:00:24", "16:00:23", 1));
-  const c = checkWritePlan(day, [{ in_time: "08:00:24", out_time: "16:00:23" }]);
+  assert.equal(
+    checkWritePlan(day, [{ in_time: "08:00:24", out_time: "16:00:23" }]).ok,
+    true
+  );
+  const c = checkWritePlan(day, [{ in_time: "08:05:00", out_time: "15:59:00" }]);
   assert.equal(c.ok, false);
-  assert.match(c.reasons.join(";"), /total 7h59m59s, schedule requires 8h00m00s/);
+  assert.match(c.reasons.join(";"), /total 7h54m00s, schedule requires 8h00m00s/);
 });
 
 test("hms formats durations with seconds", () => {

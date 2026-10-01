@@ -3,11 +3,11 @@
 
   # ticks de fichaje en vivo cada media hora hasta la noche: cada tick decide
   # por si mismo si toca entrar o salir; un tick perdido se recupera en el
-  # siguiente (la hora real da igual, el fill de las 22:00 la ajusta).
+  # siguiente (el fill de las 22:00 lima los segundos al alza).
   0,30 8-21 * * 1-5  /usr/bin/python3 /home/pi/woffu/woffu_agent.py clock
-  # cada dia laborable a las 22:00 CEST: deja hoy y los ultimos CATCHUP_DAYS
-  # dias del mes en un UNICO bloque de las horas asignadas (8h L-J, 6h V
-  # segun lo que diga Woffu para ese dia) y confirma solo si cuadran.
+  # cada dia laborable a las 22:00 CEST: redondea hoy y los ultimos
+  # CATCHUP_DAYS dias del mes a la franja de 5 minutos superior y confirma
+  # solo los que cuadran con las horas asignadas (+-5 min).
   0 22 * * 1-5   /usr/bin/python3 /home/pi/woffu/woffu_agent.py fill
   # informe semanal del lunes por la mañana
   0 8 * * 1      /usr/bin/python3 /home/pi/woffu/woffu_agent.py report
@@ -30,13 +30,17 @@ cuando se cumplen las horas asignadas. El fill de las 22:00 ajusta luego
 esas firmas al bloque exacto. Un dia sin ninguna firma (Pi apagada) se
 reporta por Slack para arreglarlo a mano en la web.
 
-OBJETIVO: un unico bloque por dia, de inicio del horario a inicio + horas
-asignadas (08:00-16:00 L-J, 09:00-15:00 V). Solo se confirma un dia cuyas
-firmas persistidas suman exactamente las horas asignadas.
+OBJETIVO: cada jornada fichada con sus horas asignadas (8h L-J, 6h V). El
+fill no reescribe el bloque del horario encima de lo fichado: respeta la
+jornada real y sube cada extremo al multiplo de 5 minutos superior, porque
+un fichaje en vivo cae con segundos (08:02:24 -> 08:05:00) y Woffu los
+cuenta. Se confirma el dia cuyas firmas suman las horas asignadas con un
+margen de 5 minutos.
 
 Y un slot sobrante no se puede borrar: ni `deleted: True` ni omitirlo del
-payload surten efecto (200 y sigue ahi). Se colapsa a duracion cero
-solapandolo con el final del ultimo tramo, que es inocuo para el computo.
+payload surten efecto (200 y sigue ahi). Tampoco se puede colapsar a
+duracion cero: el PUT devuelve 500 `_DefaultDetailError` si el tramo mide
+cero y su primera firma es un fichaje en vivo. Se deja como esta.
 
 Config en .env junto a este script:
   WOFFU_BASE_URL, WOFFU_TOKEN, WOFFU_USER_ID   (obligatorios)
@@ -224,6 +228,23 @@ def dia_no_laborable(diary) -> str:
     return ""
 
 
+REDONDEO_MIN = 5          # los fichajes se suben al multiplo de 5 min superior
+TOLERANCIA_SEG = 5 * 60   # margen al confirmar frente a las horas asignadas
+
+
+def _ceil5(t: str) -> str:
+    """La hora subida al multiplo de REDONDEO_MIN superior.
+
+    Un fichaje en vivo cae con segundos (08:02:24) y Woffu los cuenta. En vez
+    de exigir el segundo exacto, cada extremo del tramo se sube a la franja
+    de 5 minutos siguiente: 08:02:24 -> 08:05:00. Una hora que ya cae en la
+    franja no se mueve, y nunca se pasa de 23:59:59."""
+    paso = REDONDEO_MIN * 60
+    seg = _segundos(t)
+    arriba = -(-seg // paso) * paso          # techo al multiplo de `paso`
+    return _seg_hhmmss(min(arriba, 24 * 3600 - 1) if arriba >= 24 * 3600 else arriba)
+
+
 def _hms(segundos: int) -> str:
     return "%dh%02dm%02ds" % (segundos // 3600, segundos % 3600 // 60, segundos % 60)
 
@@ -316,23 +337,21 @@ def layout_persistido(wd) -> list:
     return [(sl["in"]["time"], sl["out"]["time"]) for sl in slots_completos(wd)]
 
 
-def layout_objetivo(tramos: list, n_slots: int) -> list:
-    """Como debe quedar el dia con las `n_slots` firmas que ya existen.
+def layout_objetivo(wd) -> list:
+    """Como debe quedar el dia: cada tramo fichado con sus dos extremos
+    subidos al multiplo de 5 minutos superior.
 
-    Con un solo slot, el bloque tal cual. Con mas slots que tramos hay que
-    REPARTIR el bloque en tramos contiguos (08:00-12:00, 12:00-16:00) en vez
-    de colapsar los sobrantes a duracion cero: el PUT devuelve 500
-    `_DefaultDetailError` si se le manda un tramo de longitud cero en un dia
-    cuya primera firma es un fichaje en vivo (`signType` 0). Contiguos suman
-    lo mismo y Woffu los acepta."""
-    sobrantes = max(0, n_slots - len(tramos))
-    if not sobrantes:
-        return [(i, f) for i, f in tramos]
-    ini, fin = tramos[0][0], tramos[-1][1]
-    total = _segundos(fin) - _segundos(ini)
-    trozos = len(tramos) + sobrantes
-    cortes = [_segundos(ini) + total * k // trozos for k in range(trozos + 1)]
-    return [(_seg_hhmmss(cortes[k]), _seg_hhmmss(cortes[k + 1])) for k in range(trozos)]
+    No se reescribe el bloque del horario encima de lo fichado: se respeta
+    la jornada real y solo se liman los segundos. Un tramo que al redondear
+    quedase a cero (entrada y salida en la misma franja) se deja intacto,
+    porque el PUT devuelve 500 `_DefaultDetailError` ante un tramo de
+    longitud cero cuya primera firma es un fichaje en vivo."""
+    objetivo = []
+    for ini, fin in layout_persistido(wd):
+        r_ini, r_fin = _ceil5(ini), _ceil5(fin)
+        objetivo.append((ini, fin) if _segundos(r_fin) <= _segundos(r_ini)
+                        else (r_ini, r_fin))
+    return objetivo
 
 
 def _retocar(firma: dict, nueva_hora: str) -> dict:
@@ -369,25 +388,29 @@ def rellenar_dia(env: dict, day: str) -> tuple:
     # Woffu rechaza (400 _SignAddError) firmas con hora futura: hoy solo se
     # puede rellenar una vez pasado el fin del bloque.
     ahora = datetime.now()
-    if day == ahora.date().isoformat() and ahora.hour * 60 + ahora.minute < _hhmm(tramos[-1][1]):
-        return False, ("%s: todavia no son las %s, se rellenara en el pase de las 22:00"
-                       % (day, tramos[-1][1][:5]))
+    if day == ahora.date().isoformat():
+        # Se escribira la salida redondeada hacia ARRIBA, y Woffu rechaza
+        # (400 _SignAddError) cualquier firma con hora futura.
+        pend = [_ceil5(f) for _, f in layout_persistido(wd)] or [_ceil5(tramos[-1][1])]
+        limite = max(_segundos(x) for x in pend)
+        if ahora.hour * 3600 + ahora.minute * 60 + ahora.second < limite:
+            return False, ("%s: todavia no son las %s, se rellenara en el pase "
+                           "de las 22:00" % (day, _seg_hhmmss(limite)[:5]))
 
     existentes = slots_completos(wd)
-    # "Ya esta bien" se decide comparando el LAYOUT exacto (con segundos), no
-    # las horas: 08:00:24-16:00:23 suma 8h al redondear a minutos y el dia se
-    # quedaba con 7h59 sin que nadie lo tocase.
-    if layout_persistido(wd) == layout_objetivo(tramos, len(existentes)):
+    objetivo = layout_objetivo(wd)
+    # "Ya esta bien" se decide comparando el LAYOUT exacto (con segundos): las
+    # horas redondeadas a minutos daban por bueno un dia de 7h59m59s.
+    if layout_persistido(wd) == objetivo:
         return True, ""
 
-    if len(existentes) < len(tramos):
-        return False, ("%s: %g/%gh -- solo %d franja(s) fichada(s) y el horario "
-                       "necesita %d. La API solo puede EDITAR fichajes que ya "
-                       "existan, asi que este dia hay que completarlo a mano "
-                       "en la web." % (day, actuales, esperadas, len(existentes), len(tramos)))
+    if not existentes:
+        return False, ("%s: %g/%gh -- sin franjas fichadas. La API solo puede "
+                       "EDITAR fichajes que ya existan, asi que este dia hay "
+                       "que completarlo a mano en la web."
+                       % (day, actuales, esperadas))
 
     ms = int(time.time() * 1000)
-    objetivo = layout_objetivo(tramos, len(existentes))
     slots = []
     for idx, sl in enumerate(existentes):
         ini, fin = objetivo[idx]
@@ -407,11 +430,10 @@ def rellenar_dia(env: dict, day: str) -> tuple:
     time.sleep(6)
     wd2 = workday(env, day)
     nuevas, franjas2 = horas_fichadas(wd2)
-    objetivo_s = sum(_segundos(f) - _segundos(i) for i, f in tramos)
-    if segundos_fichados(wd2) != objetivo_s:
-        return False, ("%s: tras rellenar quedan %s en vez de %s (%s)"
-                       % (day, _hms(segundos_fichados(wd2)), _hms(objetivo_s),
-                          " ".join(franjas2)))
+    if layout_persistido(wd2) != objetivo:
+        return False, ("%s: tras rellenar quedo %s en vez de %s"
+                       % (day, " ".join(franjas2),
+                          " ".join("%s-%s" % (a[:5], b[:5]) for a, b in objetivo)))
     log.info("fill %s: %g -> %gh  %s", day, actuales, nuevas, " ".join(franjas2))
     return True, ""
 
@@ -432,10 +454,12 @@ def confirmar_dia(env: dict, day: str) -> str:
     # medio minuto dejaba pasar los 7h59m59s de un fichaje en vivo.
     objetivo_s = sum(_segundos(f) - _segundos(i) for i, f in tramos)
     fichados_s = segundos_fichados(wd)
-    if objetivo_s <= 0 or fichados_s != objetivo_s:
+    # Margen de TOLERANCIA_SEG: con el redondeo a 5 minutos la jornada no cae
+    # al segundo exacto, y un segundo de desviacion no debe bloquear el dia.
+    if objetivo_s <= 0 or abs(fichados_s - objetivo_s) > TOLERANCIA_SEG:
         _, franjas = horas_fichadas(wd)
-        return ("%s: NO se confirma, %s fichados y el horario pide %s (%s)"
-                % (day, _hms(fichados_s), _hms(objetivo_s),
+        return ("%s: NO se confirma, %s fichados y el horario pide %s +-%dmin (%s)"
+                % (day, _hms(fichados_s), _hms(objetivo_s), TOLERANCIA_SEG // 60,
                    " ".join(franjas) or "sin fichajes"))
     uid = int(env["WOFFU_USER_ID"])
     # accepted=False significa "invalidada" (editada tras confirmarse) y el
