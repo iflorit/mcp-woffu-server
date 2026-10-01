@@ -12,10 +12,11 @@ export interface WorkdayData {
 
 export const MAX_SLOTS = 2;
 
-/** Signed time may differ from the schedule by up to this many seconds and
- * still count as a complete day. Live signs land with seconds (08:00:24), so
- * the agent rounds each end up to the next 5-minute mark rather than hitting
- * the exact second; demanding exactness blocked otherwise fine days. */
+/** The schedule is a MINIMUM: a day may fall short by at most this many
+ * seconds and still count as complete, and may exceed it without limit.
+ * Live signs land with seconds (08:00:24) and the agent rounds each end up to
+ * the next 5-minute mark, so a day never hits the exact second; demanding
+ * exactness blocked otherwise fine days. Working longer is never trimmed. */
 export const TOLERANCE_SECONDS = 5 * 60;
 
 /** Human-readable duration, seconds included: a "8h vs 8h" message hid the
@@ -80,14 +81,14 @@ export function checkDayReady(wd: WorkdayData): DayCheck {
   const workingTime = Number(wd.diarySummaryWorkday?.workingTime ?? 0);
   const required = workingTime > 0 ? workingTime / 3600 : 0;
   const reasons: string[] = [];
-  // Compare whole seconds, allowing TOLERANCE_SECONDS either way.
+  // The schedule is a minimum: only a shortfall beyond the tolerance fails.
   const signedSec = Math.round(signed.hours * 3600);
   if (required <= 0) {
     reasons.push("no scheduled hours for this day");
-  } else if (Math.abs(signedSec - workingTime) > TOLERANCE_SECONDS) {
+  } else if (signedSec < workingTime - TOLERANCE_SECONDS) {
     reasons.push(
-      `${hms(signedSec)} signed, schedule requires ${hms(workingTime)} ` +
-        `(tolerance ${TOLERANCE_SECONDS / 60}min)`
+      `only ${hms(signedSec)} signed, schedule requires at least ` +
+        `${hms(workingTime)} (tolerance ${TOLERANCE_SECONDS / 60}min)`
     );
   }
   if (signed.slots.length === 0) {
@@ -123,10 +124,10 @@ export function checkWritePlan(
   if (requested.length > MAX_SLOTS)
     reasons.push(`at most ${MAX_SLOTS} slots per day (got ${requested.length})`);
   if (required <= 0) reasons.push("no scheduled hours for this day");
-  else if (Math.abs(sec - workingTime) > TOLERANCE_SECONDS)
+  else if (sec < workingTime - TOLERANCE_SECONDS)
     reasons.push(
-      `requested slots total ${hms(sec)}, schedule requires ${hms(workingTime)} ` +
-        `(tolerance ${TOLERANCE_SECONDS / 60}min)`
+      `requested slots total ${hms(sec)}, schedule requires at least ` +
+        `${hms(workingTime)} (tolerance ${TOLERANCE_SECONDS / 60}min)`
     );
   if (signedHours(wd).slots.length === 0)
     reasons.push(

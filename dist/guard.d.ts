@@ -15,10 +15,11 @@ export interface WorkdayData {
     }>;
 }
 export declare const MAX_SLOTS = 2;
-/** Signed time may differ from the schedule by up to this many seconds and
- * still count as a complete day. Live signs land with seconds (08:00:24), so
- * the agent rounds each end up to the next 5-minute mark rather than hitting
- * the exact second; demanding exactness blocked otherwise fine days. */
+/** The schedule is a MINIMUM: a day may fall short by at most this many
+ * seconds and still count as complete, and may exceed it without limit.
+ * Live signs land with seconds (08:00:24) and the agent rounds each end up to
+ * the next 5-minute mark, so a day never hits the exact second; demanding
+ * exactness blocked otherwise fine days. Working longer is never trimmed. */
 export declare const TOLERANCE_SECONDS: number;
 /** Human-readable duration, seconds included: a "8h vs 8h" message hid the
  * one-second shortfall that let 08:00:24-16:00:23 confirm. */

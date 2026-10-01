@@ -65,7 +65,7 @@ test("8h in 2 slots is ready", () => {
 test("fewer hours than the schedule is rejected", () => {
   const c = checkDayReady(wd(28800, slot("08:00:00", "14:00:00", 1)));
   assert.equal(c.ok, false);
-  assert.match(c.reasons.join(";"), /6h00m00s signed, schedule requires 8h00m00s/);
+  assert.match(c.reasons.join(";"), /only 6h00m00s signed, schedule requires at least 8h00m00s/);
 });
 
 test("a day within the 5-minute tolerance is ready", () => {
@@ -78,13 +78,24 @@ test("a day within the 5-minute tolerance is ready", () => {
   assert.equal(checkDayReady(wd(28800, slot("08:00:00", "16:04:00", 1))).ok, true);
 });
 
-test("a day outside the 5-minute tolerance is rejected", () => {
+test("a day short by more than 5 minutes is rejected", () => {
   const short = checkDayReady(wd(28800, slot("08:05:00", "15:59:00", 1)));
   assert.equal(short.ok, false);
-  assert.match(short.reasons.join(";"), /7h54m00s signed, schedule requires 8h00m00s/);
-  assert.match(short.reasons.join(";"), /tolerance 5min/);
-  // Symmetric: overshooting by more than 5 minutes is rejected too.
-  assert.equal(checkDayReady(wd(28800, slot("08:00:00", "16:06:00", 1))).ok, false);
+  assert.match(short.reasons.join(";"), /only 7h54m00s signed/);
+  assert.match(short.reasons.join(";"), /at least 8h00m00s \(tolerance 5min\)/);
+});
+
+test("the schedule is a minimum: working longer is accepted", () => {
+  // The agent extends a short day up to the schedule and never trims a long
+  // one, so overshooting must confirm (user decision 2026-10-01).
+  for (const out of ["16:06:00", "17:30:00", "20:00:00"]) {
+    assert.equal(checkDayReady(wd(28800, slot("08:00:00", out, 1))).ok, true, out);
+  }
+  // Sep 22 shape: two manual slots totalling 9h.
+  const long = checkDayReady(
+    wd(28800, slot("08:00:24", "14:00:00", 1), slot("15:00:00", "18:00:00", 2))
+  );
+  assert.equal(long.ok, true);
 });
 
 test("write plan accepts slots within tolerance, refuses beyond it", () => {
@@ -95,7 +106,7 @@ test("write plan accepts slots within tolerance, refuses beyond it", () => {
   );
   const c = checkWritePlan(day, [{ in_time: "08:05:00", out_time: "15:59:00" }]);
   assert.equal(c.ok, false);
-  assert.match(c.reasons.join(";"), /total 7h54m00s, schedule requires 8h00m00s/);
+  assert.match(c.reasons.join(";"), /total 7h54m00s, schedule requires at least 8h00m00s/);
 });
 
 test("hms formats durations with seconds", () => {
@@ -126,7 +137,7 @@ const req = (...p) => p.map(([i, o]) => ({ in_time: i, out_time: o }));
 test("write plan: refuses fewer hours than the schedule before writing", () => {
   const c = checkWritePlan(day07, req(["08:00", "14:00"]));
   assert.equal(c.ok, false);
-  assert.match(c.reasons.join(";"), /total 6h00m00s, schedule requires 8h00m00s/);
+  assert.match(c.reasons.join(";"), /total 6h00m00s, schedule requires at least 8h00m00s/);
 });
 
 test("write plan: refuses more than 2 slots", () => {

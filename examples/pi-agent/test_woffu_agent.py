@@ -162,6 +162,53 @@ class RedondeoA5Minutos(unittest.TestCase):
         self.assertEqual(w.layout_persistido(ok), w.layout_objetivo(ok))
 
 
+class AlargarHastaElMinimo(unittest.TestCase):
+    """Si lo fichado no llega al horario, se ALARGA la salida del ultimo
+    tramo hasta cumplirlo (modelo elegido 2026-10-01). Solo se sube."""
+
+    def _obj(self, slots, minimo):
+        d = {"signSlots": [{"in": {"signId": 1, "time": a}, "out": {"signId": 2, "time": b}}
+                           for a, b in slots]}
+        o = w.layout_objetivo(d, minimo)
+        return o, sum(w._segundos(f) - w._segundos(i) for i, f in o)
+
+    def test_jornada_corta_llega_a_8h(self):
+        o, tot = self._obj([("08:00:23", "15:30:00")], 8 * 3600)
+        self.assertEqual(o, [("08:05:00", "16:05:00")])
+        self.assertEqual(tot, 8 * 3600)
+
+    def test_viernes_corto_llega_a_6h(self):
+        o, tot = self._obj([("09:00:23", "14:00:00")], 6 * 3600)
+        self.assertEqual(tot, 6 * 3600)
+        self.assertEqual(o[0][0], "09:05:00")
+
+    def test_solo_se_alarga_el_ultimo_tramo(self):
+        o, tot = self._obj([("08:00:00", "12:00:00"), ("13:00:00", "15:00:00")], 8 * 3600)
+        self.assertEqual(o, [("08:00:00", "12:00:00"), ("13:00:00", "17:00:00")])
+        self.assertEqual(tot, 8 * 3600)
+
+    def test_el_exceso_no_se_recorta(self):
+        o, tot = self._obj([("08:00:00", "17:30:00")], 8 * 3600)
+        self.assertEqual(o, [("08:00:00", "17:30:00")])
+        self.assertEqual(tot, 9 * 3600 + 30 * 60)
+
+    def test_dia_que_ya_cumple_no_se_toca(self):
+        o, _ = self._obj([("08:00:00", "16:00:00")], 8 * 3600)
+        self.assertEqual(o, [("08:00:00", "16:00:00")])
+
+    def test_sin_minimo_solo_redondea(self):
+        o, _ = self._obj([("08:00:23", "15:30:00")], 0)
+        self.assertEqual(o, [("08:05:00", "15:30:00")])
+
+    def test_sin_firmas_no_inventa_tramos(self):
+        self.assertEqual(w.layout_objetivo({"signSlots": []}, 8 * 3600), [])
+
+    def test_no_cruza_la_medianoche(self):
+        o, tot = self._obj([("22:00:00", "23:00:00")], 8 * 3600)
+        self.assertEqual(o, [("22:00:00", "23:59:59")])
+        self.assertLess(tot, 8 * 3600)
+
+
 class RetocarFirma(unittest.TestCase):
     """Regression: forcing signType 3 onto a live sign (signType 0) makes the
     PUT return 500 _DefaultDetailError (2026-09-22). Preserve the original."""
@@ -247,18 +294,19 @@ class PuertaDeConfirmacion(unittest.TestCase):
         self.assertIn("7h54m00s fichados y el horario pide 8h00m00s", msg)
         self.assertEqual(calls, [])
 
-    def test_margen_simetrico_por_exceso(self):
-        # 08:00-16:04 = 8h04m, dentro del margen. 08:00-16:06 se pasa.
-        self.assertEqual(self._run(wd("08:00:00", 28800, slot("08:00:00", "16:04:00", 1)))[0], "")
-        self.assertIn("NO se confirma",
-                      self._run(wd("08:00:00", 28800, slot("08:00:00", "16:06:00", 1)))[0])
+    def test_el_horario_es_un_minimo_el_exceso_confirma(self):
+        # Trabajar mas horas no bloquea el dia: el horario es un minimo.
+        for fin in ("16:04:00", "16:06:00", "17:30:00", "20:00:00"):
+            msg, calls = self._run(wd("08:00:00", 28800, slot("08:00:00", fin, 1)))
+            self.assertEqual(msg, "", "fin %s deberia confirmar" % fin)
+            self.assertEqual(len(calls), 1)
 
-    def test_nueve_horas_en_dia_de_ocho_no_confirma(self):
-        # 2026-09-22: dos tramos manuales, 9h. Pasarse del margen no se confirma.
+    def test_nueve_horas_en_dia_de_ocho_confirma(self):
+        # 2026-09-22: dos tramos manuales, 9h. Cumple el minimo, se confirma.
         d = wd("08:00:00", 28800, slot("08:00:24", "14:00:00", 1), slot("15:00:00", "18:00:00", 2))
         msg, calls = self._run(d)
-        self.assertIn("fichados y el horario pide 8h00m00s", msg)
-        self.assertEqual(calls, [])
+        self.assertEqual(msg, "")
+        self.assertEqual(len(calls), 1)
 
     def test_ocho_horas_confirma(self):
         msg, calls = self._run(wd("08:00:00", 28800, slot("08:00:00", "16:00:00", 1)))
